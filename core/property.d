@@ -1,0 +1,1 @@
+module cherry.core.property;
