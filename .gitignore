@@ -22,3 +22,9 @@ docs/
 
 # Code coverage
 *.lst
+
+# VS
+.vs
+x86
+x64
+

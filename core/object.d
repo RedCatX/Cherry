@@ -1,1 +1,0 @@
-module cherry.core.object;

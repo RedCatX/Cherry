@@ -1,4 +1,4 @@
-module core.juice;
+module cherry.core.juice;
 
 import std.algorithm;
 import std.exception;
@@ -18,7 +18,7 @@ enum dchar[string] NamedCharacterEntities =
 
 class JUICEException : Exception
 {
-    this(string file, uint line, string message) pure nothrow @safe
+    this(string file, uint line, string message) pure @safe
     {
         if (line)
             super(text(file, '(', line, "): ", message));
