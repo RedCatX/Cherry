@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.34301.259
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{002A2DE9-8BB6-484D-9802-7E4AD4084715}") = "CherryTesting", "CherryTesting.visualdproj", "{08E13649-26CA-405F-8743-FE83BD1D0672}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Debug|x64.ActiveCfg = Debug|x64
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Debug|x64.Build.0 = Debug|x64
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Debug|x86.ActiveCfg = Debug|Win32
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Debug|x86.Build.0 = Debug|Win32
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Release|x64.ActiveCfg = Release|x64
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Release|x64.Build.0 = Release|x64
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Release|x86.ActiveCfg = Release|Win32
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Release|x86.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F353BBB7-9059-4D8B-B394-7FD06139BCF1}
+	EndGlobalSection
+EndGlobal
