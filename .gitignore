@@ -28,3 +28,8 @@ docs/
 x86
 x64
 
+
+# Build output
+bin/
+*.pdb
+*.ilk
