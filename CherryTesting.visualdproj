@@ -507,9 +507,10 @@
  <Folder name="CherryTesting">
   <Folder name="cherry">
    <Folder name="core">
-    <File path="cherry\core\cobject.d" />
     <File path="cherry\core\event.d" />
     <File path="cherry\core\juice.d" />
+    <File path="cherry\core\multicast.d" />
+    <File path="cherry\core\obj.d" />
     <File path="cherry\core\package.d" />
     <File path="cherry\core\property.d" />
     <File path="cherry\core\rtti.d" />

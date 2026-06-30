@@ -2,37 +2,6 @@ module cherry.core.rtti;
 
 import std.traits;
 
-class RttiIterator(T)
-{
-    struct Node 
-    {
-        T payload;
-        Node* next;
-    }
-
-    this(Node* root)
-    {
-        _root = root;
-    }
-
-    @property bool empty() const 
-    { 
-        return !_root; 
-    }
-
-    @property T front() const
-    { 
-        return _root.payload; 
-    }
-
-    void popFront()
-    { 
-        _root = _root.next; 
-    }
-
-    private Node*  _root;
-}
-
 class Rtti
 {
     enum Type
@@ -53,10 +22,15 @@ class Rtti
 
     enum Qualifier : ubyte
     {
-        Immutable = 0b00000001,
-        Const     = 0b00000010,
-        Inout     = 0b00000100,
-        Shared    = 0b00001000
+        None             = 0,
+        Immutable        = 0b00000001,
+        Const            = 0b00000010,
+        Inout            = 0b00000100,
+        Shared           = 0b00001000,
+        ConstShared      = Const | Shared,
+        ConstInout       = Const | Inout,
+        InoutShared      = Inout | Shared,
+        ConstInoutShared = Const | Inout | Shared
     }
 
     /**
@@ -78,12 +52,32 @@ class Rtti
     }
 
     /**
+    * InitPtr property
+    * Returns: the pointer to the type info object returned by typeid(T).init.ptr, 
+	*          where T is the type represented in this Rtti. This is used for generic 
+	*          type parameters to determine whether two generic type parameters are the same.
+    */
+    @property const(void)* initPtr() pure const nothrow
+    {
+        return _initPtr;
+    }
+
+    /**
     * Type property
     * Returns: generic kind of the type represented in this Rtti.
     */
     @property Type type() pure const nothrow
     {
         return _type;
+    }
+
+   /**
+    * Qualifiers property
+    * Returns: Type qualifiers
+    */
+    @property Qualifier qualifiers() pure const nothrow
+    {
+        return _qualifiers;
     }
 
     /**
@@ -119,14 +113,23 @@ class Rtti
     *         - "other" and the current Rtti instance represent the same type
     *         - ""
     */
-    bool isSameType(immutable(Rtti) other) const 
+    bool isSameType(immutable(Rtti) other) pure const nothrow
     {
         return (this is other) 
             || (other.type == type 
-                && other.name == name 
-                && other.size == size );
+                && other.size == size 
+                && other._qualifiers == _qualifiers);
     }
 
+    bool opEquals(immutable(Rtti) other) pure const nothrow
+    {
+        return isSameType(other);
+    }
+
+    /**
+    * 
+    * Returns: string representation of this type, same as name property
+    */
     override string toString() pure const nothrow
     {
         return name;
@@ -135,20 +138,74 @@ class Rtti
     // Default constructor is disabled
     @disable this();
 
-    // Protected constructor, use RttiFactory to create instance of Rtti
-    protected this(const string name, size_t size, Type type)
+    // Protected constructor, use getRtti to create instance of Rtti
+    protected immutable this(const string name, size_t size, const(void)* initPtr, Type type, Rtti.Qualifier qualifiers)
     {
         assert(name !is null);
 
         _name = name;
         _size = size;
+        _initPtr = cast(immutable(void)*) initPtr;
         _type = type;
+        _qualifiers = qualifiers;
+    }
+
+    protected bool canImplicitCastQualifiersToThis(Qualifier q) pure const nothrow
+    {
+        if (q == Qualifier.None)
+        {
+            return _qualifiers == Qualifier.None 
+                || _qualifiers == Qualifier.Const;
+        }
+        else if (q == Qualifier.Const)
+        {
+            return _qualifiers == Qualifier.Const;
+        }
+        else if (q == Qualifier.Shared)
+        {
+            return _qualifiers == Qualifier.Shared 
+                || _qualifiers == Qualifier.ConstShared;
+        }
+        else if (q == Qualifier.Inout)
+        {
+            return _qualifiers == Qualifier.Const 
+                || _qualifiers == Qualifier.Inout 
+                || _qualifiers == Qualifier.ConstInout;
+        }
+        else if (q == Qualifier.ConstShared)
+        {
+            return _qualifiers == Qualifier.ConstShared;
+        }
+        else if (q == Qualifier.ConstInout)
+        {
+            return _qualifiers == Qualifier.Const 
+                || _qualifiers == Qualifier.ConstInout;
+        }
+        else if (q == Qualifier.InoutShared)
+        {
+            return _qualifiers == Qualifier.ConstShared 
+                || _qualifiers == Qualifier.InoutShared
+                || _qualifiers == Qualifier.ConstInoutShared;
+        }
+        else if (q == Qualifier.ConstInoutShared)
+        {
+            return _qualifiers == Qualifier.ConstShared 
+                || _qualifiers == Qualifier.ConstInoutShared;
+        }
+
+        return _qualifiers == Qualifier.Const
+            || _qualifiers == Qualifier.ConstShared
+            || _qualifiers == Qualifier.ConstInout
+            || _qualifiers == Qualifier.ConstInoutShared
+            || _qualifiers == Qualifier.Immutable;
     }
 
 private:
-    string  _name;
-    size_t  _size;
-    Type    _type;
+    string       _name;
+    size_t       _size;
+    Type         _type;
+    const(void)* _initPtr;
+    Qualifier    _qualifiers;
 }
 
 class RttiIntegerType : Rtti
@@ -162,7 +219,11 @@ class RttiIntegerType : Rtti
         if (isSameType(other))
             return true;
 
-        if (other.type == Rtti.Type.Integer && other.size >= this.size)
+        // Qualifiers check
+        if (!canImplicitCastQualifiersToThis(other.qualifiers))
+            return false;
+
+        if (other.type == Rtti.Type.Integer && other.size <= this.size)
             return true;
 
         if (other.type == Rtti.Type.Enum && 
@@ -174,23 +235,21 @@ class RttiIntegerType : Rtti
         return false;
     }
 
-    override bool isSameType(immutable(Rtti) other) const
+    override bool isSameType(immutable(Rtti) other) pure const nothrow
     {
         return super.isSameType(other) 
-            || (other.type == Rtti.Type.Integer 
-                && other.size == size 
-                && (cast(immutable(RttiIntegerType))other).isSigned == isSigned);
+            && ((cast(immutable(RttiIntegerType))other).signed == signed);
     }
 
-    @property bool isSigned() pure const nothrow 
+    @property bool signed() pure const nothrow 
     { 
         return _signed; 
     }
 
-    // Protected constructor, use RttiFactory to create instance of Rttiinteger
-    protected this(const string name, size_t size, bool signed)
+    // Protected constructor, use getRtti to create instance of RttiIntegerType
+    protected immutable this(const string name, size_t size, const(void)* initPtr, bool signed, Rtti.Qualifier qualifiers)
     {
-        super(name, size, Rtti.Type.Integer);
+        super(name, size, initPtr, Rtti.Type.Integer, qualifiers);
         _signed = signed;
     }
 
@@ -207,6 +266,10 @@ class RttiFloatType : Rtti
         // Same type check
         if (isSameType(other))
             return true;
+
+        // Qualifiers check
+        if (!canImplicitCastQualifiersToThis(other.qualifiers))
+            return false;
 
         if (other.type == Rtti.Type.Float && other.size <= this.size)
             return true;
@@ -227,17 +290,10 @@ class RttiFloatType : Rtti
         return false;
     }
 
-    override bool isSameType(immutable(Rtti) other) const
+    // Protected constructor, use RttiFactory to create instance of RttiFloatType
+    protected immutable this(const string name, size_t size, const(void)* initPtr, Rtti.Qualifier qualifiers)
     {
-        return super.isSameType(other) 
-            || (other.type == Rtti.Type.Float 
-                && other.size == size);
-    }
-
-    // Protected constructor, use RttiFactory to create instance of Rttifloat
-    protected this(const string name, size_t size)
-    {
-        super(name, size, Rtti.Type.Float);
+        super(name, size, initPtr, Rtti.Type.Float, qualifiers);
     }
 }
 
@@ -252,6 +308,10 @@ class RttiEnumType : Rtti
         if (isSameType(other))
             return true;
 
+        // Qualifiers check
+        if (!canImplicitCastQualifiersToThis(other.qualifiers))
+            return false;
+
         return false;
     }
 
@@ -260,15 +320,42 @@ class RttiEnumType : Rtti
         return _innerType; 
     }
 
-    // Protected constructor, use RttiFactory to create instance of Rttienum
-    protected this(const string name, immutable(Rtti) innerType)
+    @property const(string[]) names() const pure nothrow
     {
-        super(name, innerType.size, Rtti.Type.Enum);
-
-        _innerType = innerType;
+        return _enumValues.names;
     }
 
-    private immutable(Rtti) _innerType;
+    @property const(void*[]) values() const pure nothrow
+    {
+        return _enumValues.values;
+    }
+
+    override bool isSameType(immutable(Rtti) other) pure const nothrow
+    {
+        return super.isSameType(other) && other.name == name;
+    }
+
+protected:
+    // Protected constructor, use getRtti to create instance of RttiEnumType
+    immutable this(const string name, const(void)* initPtr, immutable(Rtti) innerType, immutable(EnumValues) enumValues, Rtti.Qualifier qualifiers)
+    {
+        super(name, innerType.size, initPtr, Rtti.Type.Enum, qualifiers);
+
+        _innerType = innerType;
+        _enumValues = enumValues;
+    }
+
+    struct EnumValues 
+	{
+        const(string)[] names;
+        const(void)*[]  values;
+    }
+
+    static __gshared EnumValues[string] s_enumValuesRegistry;
+
+private:
+	immutable(Rtti) _innerType;
+    EnumValues      _enumValues;
 }
 
 class RttiArrayType : Rtti
@@ -282,10 +369,23 @@ class RttiArrayType : Rtti
         if (isSameType(other))
             return true;
 
+        if (type != Rtti.Type.StaticArray && other.type == Rtti.Type.Null)
+            return true;
+
+        // Qualifiers check
+        if (!canImplicitCastQualifiersToThis(other.qualifiers))
+            return false;
+
         if (type == Rtti.Type.StaticArray && other.size != size)
             return false;
 
         return other.type == this.type && (cast(immutable(RttiArrayType))(other)).elementType is elementType;
+    }
+
+    override bool isSameType(immutable(Rtti) other) pure const nothrow
+    {
+        return super.isSameType(other) 
+            && (cast(immutable(RttiArrayType)) other)._elementType.isSameType(_elementType);
     }
 
     @property immutable(Rtti) elementType() pure const nothrow
@@ -293,14 +393,19 @@ class RttiArrayType : Rtti
         return _elementType;
     }
 
-    // Protected constructor, use RttiFactory to create instance of RttiArrayType
-    protected this(const string name, size_t size, Rtti.Type type, immutable(Rtti) elementType)
+    // Protected constructor, use getRtti to create instance of RttiArrayType
+    protected immutable this(const string name, 
+                             size_t size, 
+							 const(void)* initPtr, 
+                             Rtti.Type type, 
+                             immutable(Rtti) elementType, 
+                             Rtti.Qualifier qualifiers)
     {
         assert(type == Rtti.Type.StaticArray ||
                type == Rtti.Type.DynamicArray ||
                type == Rtti.Type.AssociativeArray);
 
-        super(name, size, type);
+        super(name, size, initPtr, type, qualifiers);
         _elementType = elementType;
     }
 
@@ -311,7 +416,8 @@ class RttiAssociativeArrayType : RttiArrayType
 {
     override bool isAssignableFrom(immutable(Rtti) other) const
     {
-        return super.isAssignableFrom(other) && (cast(immutable(RttiAssociativeArrayType))(other)).keyType is keyType; 
+        return super.isAssignableFrom(other)
+            && (cast(immutable(RttiAssociativeArrayType))(other)).keyType.isSameType(keyType);
     }
 
     @property immutable(Rtti) keyType() pure const nothrow
@@ -319,10 +425,21 @@ class RttiAssociativeArrayType : RttiArrayType
         return _keyType;
     }
 
-    // Protected constructor, use RttiFactory to create instance of RttiAssociativeArrayType
-    protected this(const string name, size_t size, immutable(Rtti) elementType, immutable(Rtti) keyType)
+    override bool isSameType(immutable(Rtti) other) pure const nothrow
     {
-        super(name, size, Rtti.Type.AssociativeArray, elementType);
+        return super.isSameType(other) 
+            && (cast(immutable(RttiAssociativeArrayType)) other)._keyType.isSameType(_keyType);
+    }
+
+    // Protected constructor, use getRtti to create instance of RttiAssociativeArrayType
+    protected immutable this(const string name, 
+                             size_t size, 
+							 const(void)* initPtr, 
+                             immutable(Rtti) elementType, 
+                             immutable(Rtti) keyType, 
+                             Rtti.Qualifier qualifiers)
+    {
+        super(name, size, initPtr, Rtti.Type.AssociativeArray, elementType, qualifiers);
         _keyType = keyType;
     }
 
@@ -331,40 +448,18 @@ class RttiAssociativeArrayType : RttiArrayType
 
 class RttiFunctionType : Rtti
 {
-    alias ParamsIterator = RttiIterator!(immutable(Rtti));
-
-    enum Attributes : uint
-    {
-        // pure, nothrow, @nogc, @property, @system, @trusted, @safe, ref and @live
-        aPure      = 1,
-        aNothrow   = 2,
-        aNogc      = 4,
-        aProperty  = 6,
-        aSystem    = 8,
-        aTrusted   = 16,
-        aSafe      = 32,
-        aRef       = 64,
-        aLive      = 128,
-        // const, immutable, inout, shared, static
-        aConst     = 256,
-        aImmutable = 512,
-        aInout     = 1024,
-        aShared    = 2048,
-        aStatic    = 4096
-    }
-
     override bool isAssignableFrom(immutable(Rtti) other) const
     {
         if (!other)
             return false;
 
-        // Same type check
-        if (isSameType(other))
-            return true;
-
         // Null type check
         if (other.type == Rtti.Type.Null)
             return true;
+
+        // Qualifiers check
+        if (!canImplicitCastQualifiersToThis(other.qualifiers))
+            return false;
 
         if (other.type == Rtti.Type.Function) 
         {
@@ -379,20 +474,14 @@ class RttiFunctionType : Rtti
                 return false;
 
             // Parameters check
-            ParamsIterator rhsParameters = rhs.parameters;
-            foreach (parameterType; parameters)
-            {
-                if (rhsParameters.empty)
-                    return false;
-
-                if (!parameterType.isAssignableFrom(rhsParameters.front))
-                    return false;
-
-                rhsParameters.popFront();
-            }
-
-            if (!rhsParameters.empty)
+            if (rhs.parameters.length != _parameters.length)
                 return false;
+
+            for (uint i = 0; i < _parameters.length; i++)
+            {
+                if (!_parameters[i].isAssignableFrom(rhs.parameters[i]))
+                    return false;
+            }
         } 
         else
             return false;
@@ -405,9 +494,9 @@ class RttiFunctionType : Rtti
         return _hasContextPtr;
     }
 
-    @property ParamsIterator parameters() pure const 
+    @property immutable(Rtti)[] parameters() pure const 
     { 
-        return new ParamsIterator(cast(ParamsIterator.Node*)(_parametersList));
+        return _parameters;
     }
 
     @property immutable(Rtti) returnType() pure const nothrow 
@@ -415,87 +504,50 @@ class RttiFunctionType : Rtti
         return _returnType;
     }
 
-    @property bool isStatic() pure const nothrow
+    override bool isSameType(immutable(Rtti) other) pure const nothrow
     {
-        return hasAttribute(Attributes.aStatic);
+        immutable(RttiFunctionType) otherRttiFunc = cast(immutable(RttiFunctionType)) other;
+        bool result = super.isSameType(other) 
+                    && otherRttiFunc._returnType.isSameType(_returnType)
+                    && _parameters.length == otherRttiFunc._parameters.length;
+        
+        if (result) 
+        {
+            for (uint i = 0; i < _parameters.length; i++)
+            {
+                if (!otherRttiFunc._parameters[i].isSameType(_parameters[i]))
+                    return false;
+            }
+        }
+
+        return result;
     }
 
-    bool hasAttribute(uint attribute) pure const nothrow
-    {
-        return (_attributes & attribute) > 0;
-    }
-
-    // Protected constructor, use RttiFactory to create instance of RttiFunctionType
-    protected this(const string name, 
-                   size_t size, 
-                   bool hasContextPointer, 
-                   immutable(Rtti) returnType, 
-                   ParamsIterator.Node* parametersList,
-                   uint attributes)
+    // Protected constructor, use getRtti to create instance of RttiFunctionType
+    protected immutable this(const string name, 
+                             size_t size, 
+							 const(void)* initPtr, 
+                             bool hasContextPointer, 
+                             immutable(Rtti) returnType, 
+                             immutable(Rtti)[] parameters, 
+                             Rtti.Qualifier qualifiers)
     {
         assert(returnType);
 
-        super(name, size, Rtti.Type.Function);
+        super(name, size, initPtr, Rtti.Type.Function, qualifiers);
         _hasContextPtr = hasContextPointer;
-        _parametersList = parametersList;
+        _parameters = parameters;
         _returnType = returnType;
-        _attributes = attributes;
     }
 
 private:
     bool                 _hasContextPtr;
     immutable(Rtti)      _returnType;
-    ParamsIterator.Node* _parametersList;
-    uint                 _attributes;
-}
-
-class RttiMethodType : RttiFunctionType
-{
-    // Protected constructor, use RttiFactory to create instance of RttiMethodType
-    protected this(const string name, 
-                   size_t size,
-                   string methodName,
-                   void* ptr,
-                   immutable(Rtti) returnType, 
-                   ParamsIterator.Node* parametersList,
-                   uint attributes)
-    {
-        super(name, 
-              size, 
-              !(attributes & RttiFunctionType.Attributes.aStatic), 
-              returnType, 
-              parametersList,
-              attributes);
-        
-        _methodName = methodName;
-        _ptr = ptr;
-    }
-
-    @property string methodName() pure const nothrow
-    {
-        return _methodName;
-    }
-
-    @property void* ptr() pure const nothrow
-    {
-        return cast(void*)(_ptr);
-    }
-
-    @property bool isProperty() pure const nothrow
-    {
-        return hasAttribute(RttiFunctionType.Attributes.aProperty);
-    }
-
-private:
-    void*  _ptr;
-    string _methodName;
+    immutable(Rtti)[]    _parameters;
 }
 
 class RttiClassType : Rtti
 {
-    alias MethodsIterator = RttiIterator!(immutable(RttiMethodType));
-    alias BaseTypesIterator = RttiIterator!(immutable(RttiClassType));
-
     override bool isAssignableFrom(immutable(Rtti) other) const
     {
         if (!other)
@@ -509,39 +561,106 @@ class RttiClassType : Rtti
         if (other.type == Rtti.Type.Null)
             return true;
 
+        // Qualifiers check
+        if (!canImplicitCastQualifiersToThis(other.qualifiers))
+            return false;
+
         return other.type == Rtti.Type.Class && isBaseOf(cast(immutable(RttiClassType)) other);
     }
 
-    bool isBaseOf(immutable(RttiClassType) child) pure const nothrow
+    override bool isSameType(immutable(Rtti) other) pure const nothrow
     {
-        
+        return super.isSameType(other) && other.name == name;
+    }
+
+    bool isBaseOf(immutable(RttiClassType) derived) pure const nothrow
+    {
+        immutable(RttiClassType)[] stack;
+        foreach (base; derived.baseTypes)
+            stack ~= base;
+
+        while (stack.length > 0)
+        {
+            immutable(RttiClassType) baseClass = stack[stack.length - 1];
+            if (isSameType(baseClass))
+                return true;
+
+            --stack.length;
+            foreach (base; baseClass.baseTypes)
+                stack ~= base;
+        }
+
         return false;
     }
 
-    @property BaseTypesIterator baseTypes() pure const nothrow
+    @property immutable(RttiClassType) baseClass() pure const nothrow
+	{
+        return _baseClass;
+	}
+
+    @property immutable(RttiClassType)[] baseTypes() pure const nothrow
     {
-        return new BaseTypesIterator(cast(BaseTypesIterator.Node*)(_baseTypesList));
+        return _baseTypes;
     }
 
-    @property MethodsIterator methods() const 
+    @property bool isInterface() pure const nothrow
     {
-        return new MethodsIterator(cast(MethodsIterator.Node*)(_methodsList));
+        return _isInterface;
     }
 
-    // Protected constructor, use RttiFactory to create instance of RttiClassType
-    protected this(const string name, 
-                   size_t size, 
-                   BaseTypesIterator.Node* baseTypesList, 
-                   MethodsIterator.Node* methodsList)
+    // Protected constructor, use getRtti to create instance of RttiClassType
+    protected immutable this(const string name, 
+                             size_t size, 
+							 const(void)* initPtr,                             
+                             immutable(RttiClassType)[] baseTypes, 
+                             immutable(RttiClassType) baseClass,
+                             bool isInterface,
+                             Rtti.Qualifier qualifiers)
     {
-        super(name, size, Rtti.Type.Class);
-        _baseTypesList = baseTypesList;
-        _methodsList = methodsList;
+        super(name, size, initPtr, Rtti.Type.Class, qualifiers);
+        _baseTypes = baseTypes;
+        _baseClass = baseClass;
+        _isInterface = isInterface;
     }
 
 private:
-    BaseTypesIterator.Node* _baseTypesList;
-    MethodsIterator.Node*   _methodsList;
+    immutable(RttiClassType)[] _baseTypes;
+    immutable(RttiClassType) _baseClass;
+    bool _isInterface;
+}
+
+class RttiStructType : Rtti
+{
+    override bool isAssignableFrom(immutable(Rtti) other) const
+    {
+        if (!other)
+            return false;
+
+        // Same type check
+        if (isSameType(other))
+            return true;
+
+        // Qualifiers check
+        if (!canImplicitCastQualifiersToThis(other.qualifiers))
+            return false;
+
+        return other.type == Rtti.Type.Struct 
+            && other.name == name
+            && other.size == size;
+    }
+
+    override bool isSameType(immutable(Rtti) other) pure const nothrow
+    {
+        return super.isSameType(other) && other.name == name;
+    }
+
+    protected immutable this(const string name, 
+                             size_t size, 
+							 const(void)* initPtr, 
+                             Rtti.Qualifier qualifiers)
+    {
+        super(name, size, initPtr, Rtti.Type.Struct, qualifiers);
+    }
 }
 
 class RttiPointerType : Rtti
@@ -559,6 +678,10 @@ class RttiPointerType : Rtti
         if (other.type == Rtti.Type.Null)
             return true;
 
+        // Qualifiers check
+        if (!canImplicitCastQualifiersToThis(other.qualifiers))
+            return false;
+
         return other.type == Rtti.Type.Pointer && (cast(immutable(RttiPointerType)) other).base.isAssignableFrom(base);
     }
 
@@ -567,461 +690,228 @@ class RttiPointerType : Rtti
         return _base;
     }
 
-    protected this(const string name, size_t size, immutable(Rtti) base)
+    protected immutable this(const string name, 
+                             size_t size, 
+							 const(void)* initPtr, 
+                             immutable(Rtti) base, 
+                             Rtti.Qualifier qualifiers)
     {
-        super(name, size, Rtti.Type.Function);
+        super(name, size, initPtr, Rtti.Type.Pointer, qualifiers);
         _base = base;
     }
 
     private immutable(Rtti) _base;
 }
 
-@trusted class RttiFactory 
+template GetBaseType(T)
 {
-    /**
-    * Returns the RttiFactory instance 
-    */
-    static synchronized RttiFactory get() 
+    static if (is(T : U*, U)) // Проверяем, является ли T указателем
     {
-        if (_instance is null)
-            _instance = new RttiFactory;
-
-        return _instance;
+        alias GetBaseType = U; // ElementType получает тип элемента, Unqual убирает квалификаторы
     }
-
-    static synchronized Object createInstance(const string className)
+    else static if (is(T : U[], U)) // Проверяем, является ли T массивом
     {
-        return null;
-    }
-
-protected:
-    /**
-    * This method is used to get the Rtti for null type
-    *
-    * Returns: The Rtti instance
-    */
-    immutable(Rtti) getNullRtti()
-    {
-        Rtti* ti = "typeof(null)" in _rttis;
-        if (ti is null)
-            ti = &(_rttis["typeof(null)"] = new Rtti("typeof(null)", 0, Rtti.Type.Null));
-
-        return cast(immutable(Rtti))(*ti);
-    }
-    
-    /**
-    * This method is used to get the Rtti for void type
-    *
-    * Returns: The Rtti instance
-    */
-    immutable(Rtti) getVoidRtti()
-    {
-        Rtti* ti = "void" in _rttis;
-        if (ti is null)
-            ti = &(_rttis["void"] = new Rtti("void", 0, Rtti.Type.Void));
-
-        return cast(immutable(Rtti))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for integral type
-    *
-    * Params:
-    *     name = The name of the type
-    *     size = The size in bytes for the instance of the type
-    *
-    * Returns:
-    *     The RttiIntegerType instance 
-    */
-    immutable(RttiIntegerType) getIntegerRtti(const string name, size_t size, bool signed)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiIntegerType(name, size, signed));
-
-        return cast(immutable(RttiIntegerType))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for the floating point type
-    *
-    * Params:
-    *     name = The name of the type
-    *     size = The size in bytes for the instance of the type
-    *
-    * Returns:
-    *     The RttiFloatType instance 
-    */
-    immutable(RttiFloatType) getFloatRtti(const string name, size_t size)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiFloatType(name, size));
-
-        return cast(immutable(RttiFloatType))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for enumeration type
-    *
-    * Params:
-    *     name = The name of the type
-    *     innerType = The Rtti for the inner type of this enumeration
-    *
-    * Returns:
-    *     The RttiEnumType instance 
-    */
-    immutable(RttiEnumType) getEnumRtti(const string name, immutable(Rtti) innerType)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiEnumType(name, innerType));
-
-        return cast(immutable(RttiEnumType))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for the static array type
-    *
-    * Params:
-    *     name = The name of the type
-    *     size = The size in bytes for the instance of the type
-    *     elementType = The Rtti for the array element type
-    *
-    * Returns:
-    *     The RttiArrayType instance 
-    */
-    immutable(Rtti) getStaticArrayRtti(const string name, size_t size, immutable(Rtti) elementType)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiArrayType(name, size, Rtti.Type.StaticArray, elementType));
-
-        return cast(immutable(RttiArrayType))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for the dynamic array type
-    *
-    * Params:
-    *     name = The name of the type
-    *     size = The size in bytes for the instance of the type
-    *     elementType = The Rtti for the array element type
-    *
-    * Returns:
-    *     The RttiArrayType instance 
-    */
-    immutable(RttiArrayType) getDynamicArrayRtti(const string name, size_t size, immutable(Rtti) elementType)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiArrayType(name, size, Rtti.Type.DynamicArray, elementType));
-
-        return cast(immutable(RttiArrayType))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for the associative array type
-    *
-    * Params:
-    *     name = The name of the type
-    *     size = The size in bytes for the instance of the type
-    *     elementType = The Rtti for the array element type
-    *     keyType = The Rtti for the associative array key type
-    *
-    * Returns:
-    *     The RttiAssociativeArrayType instance 
-    */
-    immutable(RttiAssociativeArrayType) getAssociativeArrayRtti(const string name, size_t size, immutable(Rtti) elementType, immutable(Rtti) keyType)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiAssociativeArrayType(name, size, elementType, keyType));
-
-        return cast(immutable(RttiAssociativeArrayType))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for the class type
-    *
-    * Params:
-    *     name = The name of the class
-    *     size = The size in bytes for the instance of this class
-    *     base = The Rtti for the class ancestor or null if it's not there
-    *
-    * Returns:
-    *     The RttiClassType instance 
-    */
-    immutable(RttiClassType) getClassRtti(const string name, 
-                                          size_t size, 
-                                          RttiClassType.BaseTypesIterator.Node* baseTypesList, 
-                                          RttiClassType.MethodsIterator.Node* methodsList)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiClassType(name, size, baseTypesList, methodsList));
-
-        return cast(immutable(RttiClassType))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for the struct type
-    *
-    * Params:
-    *     name = The name of the record
-    *     size = The size in bytes for the instance of this record
-    *
-    * Returns:
-    *     The Rtti instance 
-    */
-    immutable(Rtti) getStructRtti(const string name, size_t size)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new Rtti(name, size, Rtti.Type.Struct));
-
-        return cast(immutable(Rtti))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for the function type
-    *
-    * Params:
-    *     name = The name of the type
-    *     size = The size in bytes for the instance of this type
-    *     hasContextPointer = true if the function contain the pointer to the stack frame
-    *
-    * Returns:
-    *     The RttiFunctionType instance 
-    */
-    immutable(RttiFunctionType) getFunctionRtti(const string name, 
-                                                size_t size, 
-                                                bool hasContextPointer, 
-                                                immutable(Rtti) returnType, 
-                                                RttiFunctionType.ParamsIterator.Node* parametersList,
-                                                uint attributes)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiFunctionType(name, size, hasContextPointer, returnType, parametersList, attributes));
-
-        return cast(immutable(RttiFunctionType))(*ti);
-    }
-
-    /**
-    * This method is used to get the Rtti for the class method type
-    *
-    * Params:
-    *     name = The name of the type
-    *     size = The size in bytes for the instance of this type
-    *     hasContextPointer = true if the function contain the pointer to the stack frame
-    *
-    * Returns:
-    *     The RttiFunctionType instance 
-    */
-    immutable(RttiMethodType) getMethodRtti(const string name, 
-                                            size_t size, 
-                                            string methodName,
-                                            void* ptr,
-                                            immutable(Rtti) returnType, 
-                                            RttiFunctionType.ParamsIterator.Node* parametersList,
-                                            uint attributes)
-    {
-        return cast(immutable(RttiMethodType))(new RttiMethodType(name, size, methodName, ptr, returnType, parametersList, attributes));
-    }
-
-    /**
-    * This method is used to get the Rtti for the pointer type
-    *
-    * Params:
-    *     name = The name of the type
-    *     size = The size in bytes for the instance of this type
-    *     base = The Rtti of te pointer type
-    *
-    * Returns:
-    *     The RttiPointerType instance 
-    */
-    immutable(RttiPointerType) getPointerRtti(const string name, size_t size, immutable(Rtti) base)
-    {
-        Rtti* ti = name in _rttis;
-        if (ti is null)
-            ti = &(_rttis[name] = new RttiPointerType(name, size, base));
-
-        return cast(immutable(RttiPointerType))(*ti);
-    }
-
-    private static __gshared RttiFactory _instance;
-    private Rtti[string] _rttis;
-}
-
-private template ArrayElementType(T) 
-{
-    static if (is(T : E[], E)) {
-        alias ArrayElementType = E;
+        alias GetBaseType = U; // ElementType получает тип элемента, Unqual убирает квалификаторы
     }
     else
-        static assert(false, fullyQualifiedName!T ~ " is not array");
-}
-
-private static uint getFuncAttributes(T)()
-{
-    static if ( isFunctionPointer!T || isDelegate!T)
     {
-        uint attrs;
-        auto attributes = __traits(getFunctionAttributes, T);
-
-        foreach (attr; attributes)
-        {
-            switch (attr)
-            {
-                case "pure":
-                    attrs &= RttiFunctionType.Attributes.aPure;
-                    break;
-
-                case "nothrow":
-                    attrs &= RttiFunctionType.Attributes.aNothrow;
-                    break;
-
-                case "@nogc":
-                    attrs &= RttiFunctionType.Attributes.aNogc;
-                    break;
-
-                case "@property":
-                    attrs &= RttiFunctionType.Attributes.aProperty;
-                    break;
-
-                case "@system":
-                    attrs &= RttiFunctionType.Attributes.aSystem;
-                    break;
-
-                case "@trusted":
-                    attrs &= RttiFunctionType.Attributes.aTrusted;
-                    break;
-
-                case "@safe":
-                    attrs &= RttiFunctionType.Attributes.aSafe;
-                    break;
-
-                case "ref":
-                    attrs &= RttiFunctionType.Attributes.aRef;
-                    break;
-
-                case "@live":
-                    attrs &= RttiFunctionType.Attributes.aLive;
-                    break;
-
-                case "const":
-                    attrs &= RttiFunctionType.Attributes.aConst;
-                    break;
-
-                case "immutable":
-                    attrs &= RttiFunctionType.Attributes.aImmutable;
-                    break;
-
-                case "inout":
-                    attrs &= RttiFunctionType.Attributes.aInout;
-                    break;
-
-                case "shared":
-                    attrs &= RttiFunctionType.Attributes.aShared;
-                    break;
-
-                default:
-                    assert(false, "unknown attribute");
-            }
-        }
-
-        static if (__traits(isStaticFunction, T))
-        {
-            attrs &= RttiFunctionType.Attributes.aStatic;
-        }
-
-        return attrs;
+        // Если T не является указателем или массивом, возвращаем T
+        alias GetBaseType = T;
     }
-    else
-        static assert(false, fullyQualifiedName!T ~ " is not function or class method");
 }
 
 /**
-*
-*/
+ *
+ */
 auto getRtti(T)(T t)
 {
     return getRtti!T;
 }
 
+import std.meta;
+
 /**
-*
-*/
+ * Returns the canonical Rtti instance describing T.
+ *
+ * The result is memoized per type, so repeated calls return the very same
+ * immutable instance.  This keeps reference-identity ('is') comparisons of
+ * Rtti objects valid and avoids re-allocating type information on every call.
+ *
+ * During CTFE (for example, when used in a field initializer) memoization is
+ * bypassed, since __gshared storage and synchronized blocks are unavailable
+ * at compile time.
+ */
 auto getRtti(T)()
 {
-    RttiFactory f = RttiFactory.get;
-    static if (is(T == typeof(null)))
-        return f.getNullRtti();
-    else static if (is(T == void))
-        return f.getVoidRtti();
+    if (__ctfe)
+        return makeRtti!T();
+
+    import std.typecons : Rebindable;
+
+    alias R = typeof(makeRtti!T());
+    __gshared Rebindable!R instance;  // mutable reference, immutable target
+    static bool instantiated;         // thread-local fast-path guard
+
+    if (!instantiated)
+    {
+        synchronized
+        {
+            if (instance.get is null)
+            {
+                instance = makeRtti!T();
+                static if (is(T == class))
+                    registerClassRtti(typeid(T).name, instance.get);
+            }
+            instantiated = true;
+        }
+    }
+
+    return instance.get;
+}
+
+private __gshared RttiClassType[string] s_classRttiRegistry;
+
+/**
+ * Looks up the RttiClassType registered for a class by its runtime type name
+ * (as returned by typeid(obj).name).  Returns null when no RTTI has been
+ * created for that type yet (for example, a type that never registered a
+ * property).  This lets a live object resolve its own type information.
+ */
+immutable(RttiClassType) rttiForName(string typeName)
+{
+    synchronized (RttiClassType.classinfo)
+    {
+        if (auto p = typeName in s_classRttiRegistry)
+            return cast(immutable(RttiClassType)) *p;
+    }
+    return null;
+}
+
+private void registerClassRtti(string typeName, immutable(RttiClassType) rtti)
+{
+    synchronized (RttiClassType.classinfo)
+    {
+        s_classRttiRegistry[typeName] = cast(RttiClassType) rtti;
+    }
+}
+
+private auto makeRtti(T)()
+{
+    static if (is(immutable T == T))
+        immutable Rtti.Qualifier qualifiers = Rtti.Qualifier.Immutable;
+    else
+        immutable Rtti.Qualifier qualifiers = cast(Rtti.Qualifier)((is(const T == T) << 1) | (is(inout T == T) << 2) | (is(shared T == T) << 3));
+
+    static if (is(T == void))
+    {
+        return new immutable(Rtti)("void", 0, null, Rtti.Type.Void, Rtti.Qualifier.None);
+    }
+    else static if (is(T == typeof(null)))
+    {
+        return new immutable(Rtti)("typeof(null)", 0, null, Rtti.Type.Null, Rtti.Qualifier.None);
+    }
     else static if (is(T == enum))
     {
         auto base = getRtti!(OriginalType!T);
-        return f.getEnumRtti(fullyQualifiedName!T, base);
+        string fullName = fullyQualifiedName!T;
+		RttiEnumType.EnumValues* eValues = (fullName in RttiEnumType.s_enumValuesRegistry); 
+
+        if (!eValues)
+		{
+            eValues = new RttiEnumType.EnumValues;
+
+			foreach (memberName; __traits(allMembers, T))
+			{
+				enum member = __traits(getMember, T, memberName);
+				eValues.names ~= memberName;
+
+				auto buf = new T;
+				*buf = member;
+
+				eValues.values ~= cast(void*) buf;
+			}
+
+            RttiEnumType.s_enumValuesRegistry[fullName] = *eValues; 
+		}
+
+        return new immutable(RttiEnumType)(fullName, 
+										   typeid(T).initializer.ptr, 
+										   base, 
+										   cast(immutable(RttiEnumType.EnumValues)) *eValues, 
+										   qualifiers);
     }
     else static if (__traits(isIntegral, T))
-        return f.getIntegerRtti(fullyQualifiedName!T, T.sizeof, isSigned!T);
+    {
+        return new immutable(RttiIntegerType)(fullyQualifiedName!T, T.sizeof, typeid(T).initializer.ptr, isSigned!T, qualifiers);
+    }
     else static if (__traits(isFloating, T))
-        return f.getFloatRtti(fullyQualifiedName!T, T.sizeof);
+    {
+        return new immutable(RttiFloatType)(fullyQualifiedName!T, T.sizeof, typeid(T).initializer.ptr, qualifiers);
+    }
     else static if (__traits(isStaticArray, T))
     {
-        auto elType = getRtti!(ArrayElementType!T);
-        return f.getStaticArrayRtti(fullyQualifiedName!T, T.sizeof, elType);
+        auto elementType = getRtti!(GetBaseType!T);
+        return new immutable(RttiArrayType)(fullyQualifiedName!T, 
+											T.sizeof, 
+											typeid(T).initializer.ptr, 
+											Rtti.Type.StaticArray, 
+											elementType, 
+											qualifiers);
     }
     else static if (isDynamicArray!T)
     {
-        auto elType = getRtti!(ArrayElementType!T);
-        return f.getDynamicArrayRtti(fullyQualifiedName!T, T.sizeof, elType);
+        auto elementType = getRtti!(GetBaseType!T);
+        return new immutable(RttiArrayType)(fullyQualifiedName!T, 
+											T.sizeof, 
+											typeid(T).initializer.ptr, 
+											Rtti.Type.DynamicArray, 
+											elementType, 
+											qualifiers);
     }
-    else static if (is(T == class))
+    else static if (is(T == U[K], U, K))
     {
-        RttiClassType.BaseTypesIterator.Node* pFirstBaseType, pLastBaseType;
-        RttiClassType.MethodsIterator.Node* pFirstMethod, pLastMethod;
-
+        auto elementType = getRtti!U;
+        auto keyType = getRtti!K;
+        return new immutable(RttiAssociativeArrayType)(fullyQualifiedName!T, 
+													   T.sizeof, 
+													   typeid(T).initializer.ptr, 
+													   elementType, 
+													   keyType, 
+													   qualifiers);
+    }
+    else static if (is(T == class) || is(T == interface))
+    {
         // Base types
+        immutable(RttiClassType)[] baseTypes;
+        RttiClassType baseClass;
         foreach (BT; BaseTypeTuple!T)
-        {
-            if (!pLastBaseType)
-            {
-                pFirstBaseType = 
-                pLastBaseType = new RttiClassType.BaseTypesIterator.Node(getRtti!BT, null);
-            }
-            else
-            {
-                pLastBaseType.next = new RttiClassType.BaseTypesIterator.Node(getRtti!BT, null);
-                pLastBaseType = pLastBaseType.next;
-            }
-        }
+		{
+            baseTypes ~= cast(immutable(RttiClassType))(getRtti!BT);
+            if (is(BT == class))
+                baseClass = cast(RttiClassType) getRtti!BT;
+		}
 
-        // Methods
-        foreach(member; __traits(derivedMembers, T))
-        {
-            static if ( __traits(compiles, isSomeFunction!(__traits(getMember, B, member))) ) 
-            {
-                static if ( isSomeFunction!(__traits(getMember, B, member)) )
-                {
-
-                }
-            }
-        }
-
-        return f.getClassRtti(fullyQualifiedName!T, T.sizeof, pFirstBaseType, pFirstMethod);
+        return new immutable(RttiClassType)(fullyQualifiedName!T, 
+											T.sizeof, 
+											typeid(T).initializer.ptr, 
+											baseTypes, 
+											cast(immutable(RttiClassType)) baseClass, 
+											is(T == interface), 
+											qualifiers);
     }
     else static if (is(T == struct))
-        return f.getStructRtti(fullyQualifiedName!Tg, T.sizeof);
+    {
+        return new immutable(RttiStructType)(fullyQualifiedName!T, 
+											 T.sizeof, 
+											 typeid(T).initializer.ptr, 
+											 qualifiers);
+    }
     else static if (isSomeFunction!T)
     {
-        uint attributes = getFuncAttributes!T();
         immutable(Rtti) rType = getRtti!(ReturnType!T);
         alias pTypes = Parameters!T;
-        RttiFunctionType.ParamsIterator.Node* pFirst, pLast;
         string name = rType.toString;
+        immutable(Rtti)[] parameters;
 
         static if (isFunctionPointer!T)
             name ~= " function(";
@@ -1030,23 +920,31 @@ auto getRtti(T)()
 
         foreach (pType; pTypes)
         {
-            if (!pLast)
-            {
-                pLast = 
-                    pFirst = new RttiFunctionType.ParamsIterator.Node(getRtti!pType, null);
-                name ~= pLast.payload.name;
-            } 
+            parameters ~= getRtti!pType;
+            if (parameters.length == 1)
+                name ~= parameters[parameters.length - 1].name;
             else 
-            {
-                pLast.next = new RttiFunctionType.ParamsIterator.Node(getRtti!pType, null);
-                pLast = pLast.next;
-                name ~= (", " ~ pLast.payload.name);
-            }
+                name ~= (", " ~ parameters[parameters.length - 1].name);
         }
 
         name ~= ")";
 
-        return f.getFunctionRtti(name, T.sizeof, isDelegate!T, rType, pFirst, attributes);
+        return new immutable(RttiFunctionType)(name, 
+											   T.sizeof, 
+											   typeid(T).initializer.ptr, 
+											   isDelegate!T, 
+											   rType, 
+											   parameters, 
+											   qualifiers);
+    }
+    else static if (isPointer!T)
+    {
+        auto baseType = getRtti!(GetBaseType!T);
+        return new immutable(RttiPointerType)(fullyQualifiedName!T, 
+											  T.sizeof, 
+											  typeid(T).initializer.ptr, 
+											  baseType, 
+											  qualifiers);
     }
     else
         static assert(false, "Unknown type: " ~ fullyQualifiedName!T);
@@ -1056,12 +954,38 @@ unittest
 {
     enum E { zero, one, two }
     auto eti = getRtti!E;
+    assert(eti.names == ["zero", "one", "two"]);
+    assert(*(cast(const(E)*) eti.values[0]) == E.zero);
+    assert(*(cast(const(E)*) eti.values[1]) == E.one);
+    assert(*(cast(const(E)*) eti.values[2]) == E.two);
+
     auto ti = getRtti!(int);
     auto ti2 = getRtti!(int);
+    auto lti = getRtti!(long);
+    auto ulti = getRtti!(ulong);
+
     assert(ti.toString() == "int");
-    assert(ti is ti2);
+    assert(ti == ti2);
     assert(ti.isAssignableFrom(eti));
     assert(eti.isAssignableFrom(ti) == false);
+    assert(lti.isAssignableFrom(ti));
+    assert(ulti.isAssignableFrom(ti));
+    assert(ulti.signed == false);
+}
+
+unittest
+{
+    auto ati = getRtti!(int[10]);
+    assert(ati.type == Rtti.Type.StaticArray);
+    assert(ati.elementType == getRtti!int);
+    auto dati = getRtti!(float[]);
+    assert(dati.type == Rtti.Type.DynamicArray);
+    assert(dati.elementType == getRtti!float);
+    auto sti = getRtti!string;
+    assert(sti.type == Rtti.Type.DynamicArray);
+    assert(sti.elementType == getRtti!(immutable char));
+    assert(sti.isAssignableFrom(getRtti!(immutable(char)[])));
+    assert(!sti.isAssignableFrom(getRtti!(char[])));
 }
 
 unittest
@@ -1077,15 +1001,16 @@ unittest
     assert(!ft1.hasContextPointer);
     assert(ft1.name == "int function(int, bool)");
     assert(ft1.returnType.isSameType(getRtti!(int)));
-    auto params = ft1.parameters;
-    assert(params.front.isSameType(getRtti!(int)));
-    params.popFront();
-    assert(params.front.isSameType(getRtti!(bool)));
+    assert(ft1.parameters.length == 2);
+    assert(ft1.parameters[0].isSameType(getRtti!(int)));
+    assert(ft1.parameters[1].isSameType(getRtti!(bool)));
+    assert(ft1.isSameType(getRtti!F1));
 
     auto ft2 = getRtti!F2;
     assert(ft2.name == "int function(uint, bool)");
     assert(ft2.isAssignableFrom(ft1));
     assert(ft1.isAssignableFrom(ft2));
+    assert(!ft1.isSameType(ft2));
 
     auto ft3 = getRtti!F3;
     assert(ft3.name == "void function(int, bool)");
@@ -1094,6 +1019,7 @@ unittest
     
     auto ft4 = getRtti!F4;
     assert(ft4.name == "int function()");
+    assert(ft4.parameters.length == 0);
     assert(!ft1.isAssignableFrom(ft4));
     assert(!ft4.isAssignableFrom(ft1));
 
@@ -1106,16 +1032,15 @@ unittest
 
 unittest
 {
-    class A
+    class X
     {
-        static void sf() {}
+        void xxx() {}
+        abstract void f();
+    }
 
-        @property int p1() pure const nothrow { return 0; }
-        @property void p1(int v) nothrow {}
-
-        void f() {}
-
-        private void pf() {}
+    class A : X
+    {
+        override void f() {}
     }
     
     interface IA
@@ -1126,50 +1051,71 @@ unittest
 
     class B : A, IA
     {
-        override void f() {}
+        void f3() {}
         override void f1() {}
         override void f2() {}
-
-        this() {}
-        static this() {}
-
-        int g() { return 0; }
-        int g(int a) { return a; }
-
-        @property int a1() const { return 1; }
-
-        bool c() const { return true; }
     }
 
-    
+    immutable(RttiClassType) xt = getRtti!X;
+    immutable(RttiClassType) at = getRtti!A;
+    immutable(RttiClassType) iat = getRtti!IA;
+    immutable(RttiClassType) bt = getRtti!B;
 
-    auto bt = getRtti!B;
-    auto at = getRtti!A;
-    auto iat = getRtti!IA;
-    auto baseTypes = bt.baseTypes;
-    assert(baseTypes.front.isSameType(at));
-    baseTypes.popFront();
-    assert(baseTypes.front.isSameType(iat));
-
+    assert(xt.isBaseOf(at));
+    assert(!xt.isInterface); 
+    assert(at.isBaseOf(bt));
+    assert(!at.isInterface);
+    assert(iat.isBaseOf(bt));
+    assert(iat.isInterface);
+    assert(!iat.isBaseOf(at));
     assert(at.isAssignableFrom(bt));
     assert(iat.isAssignableFrom(bt));
-    assert(at.findMethods("sf").front.isStatic);
+    assert(!bt.isAssignableFrom(at));
+    assert(!bt.isAssignableFrom(iat));
 
-    auto aprop = at.findMethods("p1");
-    foreach (prop; aprop)
+    foreach (base; bt.baseTypes)
     {
-        assert(prop.isProperty);
-        if (prop.returnType.isSameType(getRtti!int))
-        {
-            assert(prop.parameters.empty);
-            assert(prop.hasAttribute(RttiFunctionType.Attributes.aPure));
-            assert(prop.hasAttribute(RttiFunctionType.Attributes.aConst));
-            assert(prop.hasAttribute(RttiFunctionType.Attributes.aNothrow));
-        }
-        else
-        {
-            assert(prop.returnType.isSameType(getRtti!void));
-            assert(prop.hasAttribute(RttiFunctionType.Attributes.aNothrow));
-        }
+        assert(base.isSameType(at) || base.isSameType(iat));
+	}
+
+    assert(at.baseClass.isSameType(xt));
+    assert(bt.baseClass.isSameType(at));
+}
+
+unittest
+{
+    struct A
+    {
+        int val;
+        string str;
     }
+
+    struct B
+    {
+        uint val;
+        string str;
+    }
+
+    auto ti1 = getRtti!A;
+    auto ti2 = getRtti!B;
+    assert(ti1.isSameType(getRtti!A));
+    assert(!ti1.isSameType(getRtti!B));
+    assert(ti1.isAssignableFrom(getRtti!A));
+    assert(!ti1.isAssignableFrom(getRtti!(typeof(null))));
+    assert(!ti1.isAssignableFrom(ti2));
+    assert(ti2.isSameType(getRtti!B));
+    assert(!ti2.isSameType(getRtti!A));
+    assert(ti2.isAssignableFrom(getRtti!B));
+    assert(!ti2.isAssignableFrom(ti1));
+}
+
+
+unittest
+{
+    // getRtti is memoized: repeated calls yield the very same instance, so
+    // reference-identity comparisons of type information are valid.
+    assert(getRtti!int is getRtti!int);
+    assert(getRtti!(double[]) is getRtti!(double[]));
+    assert(getRtti!(int[string]) is getRtti!(int[string]));
+    assert(getRtti!int !is getRtti!uint);
 }
