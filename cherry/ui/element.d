@@ -181,6 +181,15 @@ class Element : CherryObject
 
 protected:
    /**
+    * Inherited property values flow down the element tree: the inheritance
+    * context of an element is its tree parent.
+    */
+    override @property inout(CherryObject) inheritanceParent() inout pure nothrow @nogc
+    {
+        return _parent;
+    }
+
+   /**
     * Called on the element right after it has been added to a parent.
     * Inherited-property and style invalidation will hook in here later.
     */
@@ -425,4 +434,67 @@ unittest
     host.addChild(probe);
     host.clearChildren();
     assert(probe.detachedCount == 3);
+}
+
+unittest
+{
+    import cherry.core.property;
+    import cherry.core.rtti;
+    import cherry.core.value;
+
+    static class Label : Element
+    {
+    }
+
+    PropertyMetadata inheritingMeta;
+    inheritingMeta.defaultValue = Value(10);
+    inheritingMeta.inherits = true;
+    auto sizeProperty = Property.register("InheritedSize", getRtti!int(), getRtti!Label(), inheritingMeta);
+
+    PropertyMetadata plainMeta;
+    plainMeta.defaultValue = Value(7);
+    auto plainProperty = Property.register("PlainSize", getRtti!int(), getRtti!Label(), plainMeta);
+
+    auto root  = new Element;
+    auto panel = new Element;
+    auto label = new Label;
+    root.addChild(panel);
+    panel.addChild(label);
+
+    // Nothing set anywhere: the element's own effective default.
+    assert(label.getValue(sizeProperty).get!int == 10);
+
+    // A value on a distant ancestor is inherited across levels.
+    root.setValue(sizeProperty, Value(20));
+    assert(label.getValue(sizeProperty).get!int == 20);
+    assert(!label.hasLocalValue(sizeProperty));
+
+    // The nearest ancestor wins.
+    panel.setValue(sizeProperty, Value(30));
+    assert(label.getValue(sizeProperty).get!int == 30);
+
+    // A local value beats inheritance; ancestors are unaffected.
+    label.setValue(sizeProperty, Value(40));
+    assert(label.getValue(sizeProperty).get!int == 40);
+    assert(panel.getValue(sizeProperty).get!int == 30);
+
+    // Clearing the local value falls back to inheritance.
+    label.clearValue(sizeProperty);
+    assert(label.getValue(sizeProperty).get!int == 30);
+
+    // A valueless ancestor is skipped, not treated as a source.
+    panel.clearValue(sizeProperty);
+    assert(label.getValue(sizeProperty).get!int == 20);
+
+    // Detaching the subtree cuts the inheritance chain...
+    panel.detach();
+    assert(label.getValue(sizeProperty).get!int == 10);
+
+    // ...and re-attaching restores it.
+    root.addChild(panel);
+    assert(label.getValue(sizeProperty).get!int == 20);
+
+    // Non-inheriting properties never flow down the tree.
+    root.setValue(plainProperty, Value(99));
+    assert(label.getValue(plainProperty).get!int == 7);
 }
