@@ -1,6 +1,7 @@
 module cherry.ui.element;
 
 import cherry.core.obj;
+import cherry.ui.event;
 
 /**
  * Base class for every node of the element tree.
@@ -135,6 +136,84 @@ class Element : CherryObject
     }
 
    /**
+    * Registers a handler for a routed event on this element.
+    *
+    * Params:
+    *     event = The routed event to listen for
+    *     handler = Callback invoked when the event's route passes this element
+    *     handledEventsToo = Invoke the handler even for events already
+    *                        marked as handled
+    */
+    void addHandler(immutable(RoutedEvent) event, RoutedEventHandler handler, bool handledEventsToo = false)
+    in {
+        assert(event !is null);
+        assert(handler !is null);
+    }
+    do {
+        _handlers[event.id] ~= HandlerEntry(handler, handledEventsToo);
+    }
+
+   /**
+    * Removes one registration of the handler for the event.  Does nothing
+    * when the handler is not registered.
+    */
+    void removeHandler(immutable(RoutedEvent) event, RoutedEventHandler handler)
+    in {
+        assert(event !is null);
+    }
+    do {
+        auto list = event.id in _handlers;
+        if (list is null)
+            return;
+
+        foreach (i, entry; *list)
+        {
+            if (entry.handler == handler)
+            {
+                *list = (*list)[0 .. i] ~ (*list)[i + 1 .. $];
+                return;
+            }
+        }
+    }
+
+   /**
+    * Raises a routed event from this element.
+    *
+    * The route is captured before any handler runs, so tree mutations made
+    * by handlers do not affect it: direct invokes this element's handlers
+    * only, bubble walks from here up to the root, tunnel walks from the
+    * root down to here.
+    */
+    void raiseEvent(RoutedEventArgs args)
+    in {
+        assert(args !is null);
+    }
+    do {
+        args.initializeRoute(this);
+
+        Element[] route = [this];
+        foreach (ancestor; ancestors)
+            route ~= ancestor;
+
+        final switch (args.routedEvent.routingStrategy)
+        {
+            case RoutingStrategy.direct:
+                invokeLocalHandlers(args);
+                break;
+
+            case RoutingStrategy.bubble:
+                foreach (element; route)
+                    element.invokeLocalHandlers(args);
+                break;
+
+            case RoutingStrategy.tunnel:
+                foreach_reverse (element; route)
+                    element.invokeLocalHandlers(args);
+                break;
+        }
+    }
+
+   /**
     * Whether this element is a (transitive) ancestor of the given one.
     * An element is not considered its own ancestor.
     */
@@ -205,8 +284,33 @@ protected:
     }
 
 private:
-    Element   _parent;
-    Element[] _children;
+   /*
+    * Invokes this element's own handlers for the args' event, respecting
+    * the handled flag.  Iterates a snapshot of the handler list, so
+    * handlers may add or remove handlers while the event is delivered.
+    */
+    void invokeLocalHandlers(RoutedEventArgs args)
+    {
+        auto list = args.routedEvent.id in _handlers;
+        if (list is null)
+            return;
+
+        foreach (entry; *list)
+        {
+            if (!args.handled || entry.handledEventsToo)
+                entry.handler(this, args);
+        }
+    }
+
+    struct HandlerEntry
+    {
+        RoutedEventHandler handler;
+        bool handledEventsToo;
+    }
+
+    Element              _parent;
+    Element[]            _children;
+    HandlerEntry[][uint] _handlers;
 }
 
 /**
