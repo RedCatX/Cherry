@@ -163,6 +163,59 @@ private:
 }
 
 /**
+ * Instance-bound accessor for a routed event, enabling the Delphi/C#-style
+ * subscription syntax:
+ * ---
+ * button.onClick ~= &onButtonClick;    // addEventHandler
+ * button.onClick -= &onButtonClick;    // removeEventHandler
+ * ---
+ * A control exposes one accessor property per event:
+ * ---
+ * @property EventAccessor onClick()
+ * {
+ *     return EventAccessor(this, clickEvent);
+ * }
+ * ---
+ * The accessor only pairs an element with an event and is read-only by
+ * construction (private fields, no setters); it cannot be declared
+ * immutable because subscribing mutates the referenced element.
+ * Subscribing with handledEventsToo still requires an explicit
+ * addEventHandler call.
+ */
+struct EventAccessor
+{
+    this(Element element, immutable(RoutedEvent) event) pure nothrow @nogc
+    in {
+        assert(element !is null);
+        assert(event !is null);
+    }
+    do {
+        _element = element;
+        _event = event;
+    }
+
+   /**
+    * Subscribes the handler to the event on the bound element.
+    */
+    void opOpAssign(string op : "~")(RoutedEventHandler handler)
+    {
+        _element.addEventHandler(_event, handler);
+    }
+
+   /**
+    * Removes one registration of the handler from the bound element.
+    */
+    void opOpAssign(string op : "-")(RoutedEventHandler handler)
+    {
+        _element.removeEventHandler(_event, handler);
+    }
+
+private:
+    Element                 _element;
+    immutable(RoutedEvent)  _event;
+}
+
+/**
  * Central registry of routed events: assigns ids and enforces per-owner
  * name uniqueness.
  */
@@ -256,9 +309,9 @@ unittest
         };
     }
 
-    root.addHandler(clickEvent, make("root"));
-    mid.addHandler(clickEvent, make("mid"));
-    leaf.addHandler(clickEvent, make("leaf"));
+    root.addEventHandler(clickEvent, make("root"));
+    mid.addEventHandler(clickEvent, make("mid"));
+    leaf.addEventHandler(clickEvent, make("leaf"));
 
     // Bubble: target first, then up to the root.
     auto args = new RoutedEventArgs(clickEvent);
@@ -278,9 +331,9 @@ unittest
     // Tunnel: root first, down to the target.
     log = null;
     senders = null;
-    root.addHandler(previewEvent, make("root"));
-    mid.addHandler(previewEvent, make("mid"));
-    leaf.addHandler(previewEvent, make("leaf"));
+    root.addEventHandler(previewEvent, make("root"));
+    mid.addEventHandler(previewEvent, make("mid"));
+    leaf.addEventHandler(previewEvent, make("leaf"));
     leaf.raiseEvent(new RoutedEventArgs(previewEvent));
     assert(log == ["root", "mid", "leaf"]);
     assert(senders == [root, mid, leaf]);
@@ -288,8 +341,8 @@ unittest
     // Direct: only the raising element.
     log = null;
     senders = null;
-    root.addHandler(pokeEvent, make("root"));
-    leaf.addHandler(pokeEvent, make("leaf"));
+    root.addEventHandler(pokeEvent, make("root"));
+    leaf.addEventHandler(pokeEvent, make("leaf"));
     leaf.raiseEvent(new RoutedEventArgs(pokeEvent));
     assert(log == ["leaf"]);
 
@@ -297,7 +350,7 @@ unittest
     log = null;
     senders = null;
     auto lone = new Element;
-    lone.addHandler(clickEvent, make("lone"));
+    lone.addEventHandler(clickEvent, make("lone"));
     lone.raiseEvent(new RoutedEventArgs(clickEvent));
     assert(log == ["lone"]);
 
@@ -305,14 +358,14 @@ unittest
     // handledEventsToo.
     auto stopEvent = RoutedEvent.register("Stop", RoutingStrategy.bubble, getRtti!Panel());
     log = null;
-    leaf.addHandler(stopEvent, (Element sender, RoutedEventArgs a) {
+    leaf.addEventHandler(stopEvent, (Element sender, RoutedEventArgs a) {
         log ~= "leaf";
         a.handled = true;
     });
-    mid.addHandler(stopEvent, (Element sender, RoutedEventArgs a) {
+    mid.addEventHandler(stopEvent, (Element sender, RoutedEventArgs a) {
         log ~= "mid";
     });
-    root.addHandler(stopEvent, (Element sender, RoutedEventArgs a) {
+    root.addEventHandler(stopEvent, (Element sender, RoutedEventArgs a) {
         log ~= "root+handled";
     }, true);
     auto stopArgs = new RoutedEventArgs(stopEvent);
@@ -324,18 +377,74 @@ unittest
     // handlers that are not registered.
     auto rmEvent = RoutedEvent.register("Rm", RoutingStrategy.direct, getRtti!Panel());
     RoutedEventHandler h = (Element sender, RoutedEventArgs a) { log ~= "h"; };
-    leaf.addHandler(rmEvent, h);
-    leaf.addHandler(rmEvent, h);
+    leaf.addEventHandler(rmEvent, h);
+    leaf.addEventHandler(rmEvent, h);
     log = null;
     leaf.raiseEvent(new RoutedEventArgs(rmEvent));
     assert(log == ["h", "h"]);
-    leaf.removeHandler(rmEvent, h);
+    leaf.removeEventHandler(rmEvent, h);
     log = null;
     leaf.raiseEvent(new RoutedEventArgs(rmEvent));
     assert(log == ["h"]);
-    leaf.removeHandler(rmEvent, h);
-    leaf.removeHandler(rmEvent, h); // not registered: no-op
+    leaf.removeEventHandler(rmEvent, h);
+    leaf.removeEventHandler(rmEvent, h); // not registered: no-op
     log = null;
     leaf.raiseEvent(new RoutedEventArgs(rmEvent));
     assert(log.length == 0);
+}
+
+unittest
+{
+    // The Delphi-style subscription syntax through EventAccessor.
+    //
+    // A real control registers its events in a shared static this of its own
+    // module and stores them in static immutable fields; here the event is
+    // passed through the constructor instead, because event.d and element.d
+    // import each other and a module constructor in this module would create
+    // a cycle.
+    static class Button : Element
+    {
+        this(immutable(RoutedEvent) clickEvent)
+        {
+            _clickEvent = clickEvent;
+        }
+
+        @property EventAccessor onClick()
+        {
+            return EventAccessor(this, _clickEvent);
+        }
+
+        private immutable(RoutedEvent) _clickEvent;
+    }
+
+    auto clickEvent = RoutedEvent.register("AccessorClick", RoutingStrategy.bubble, getRtti!Button());
+
+    auto panel  = new Element;
+    auto button = new Button(clickEvent);
+    panel.addChild(button);
+
+    string[] log;
+
+    void onButtonClick(Element sender, RoutedEventArgs args)
+    {
+        log ~= "clicked";
+    }
+
+    // Subscription through ~= on the accessor property.
+    button.onClick ~= &onButtonClick;
+    button.raiseEvent(new RoutedEventArgs(clickEvent));
+    assert(log == ["clicked"]);
+
+    // Handlers added through an accessor participate in routing as usual.
+    auto panelClick = EventAccessor(panel, clickEvent);
+    panelClick ~= (Element sender, RoutedEventArgs args) { log ~= "panel"; };
+    log = null;
+    button.raiseEvent(new RoutedEventArgs(clickEvent));
+    assert(log == ["clicked", "panel"]);
+
+    // -= removes one registration.
+    button.onClick -= &onButtonClick;
+    log = null;
+    button.raiseEvent(new RoutedEventArgs(clickEvent));
+    assert(log == ["panel"]);
 }

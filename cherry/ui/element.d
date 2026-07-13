@@ -144,7 +144,7 @@ class Element : CherryObject
     *     handledEventsToo = Invoke the handler even for events already
     *                        marked as handled
     */
-    void addHandler(immutable(RoutedEvent) event, RoutedEventHandler handler, bool handledEventsToo = false)
+    void addEventHandler(immutable(RoutedEvent) event, RoutedEventHandler handler, bool handledEventsToo = false)
     in {
         assert(event !is null);
         assert(handler !is null);
@@ -157,7 +157,7 @@ class Element : CherryObject
     * Removes one registration of the handler for the event.  Does nothing
     * when the handler is not registered.
     */
-    void removeHandler(immutable(RoutedEvent) event, RoutedEventHandler handler)
+    void removeEventHandler(immutable(RoutedEvent) event, RoutedEventHandler handler)
     in {
         assert(event !is null);
     }
