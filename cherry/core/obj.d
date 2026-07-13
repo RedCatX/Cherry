@@ -25,8 +25,10 @@ class CherryObject
 
    /**
     * Returns the effective value of a property: the locally set value if one
-    * exists, otherwise the metadata default.  Read-only properties compute
-    * their value through the metadata callback.
+    * exists; otherwise, for properties whose metadata sets `inherits`, the
+    * nearest inherited value down the inheritance chain; otherwise the
+    * metadata default.  Read-only properties compute their value through
+    * the metadata callback.
     */
     Value getValue(immutable(Property) property) const
     in {
@@ -40,6 +42,14 @@ class CherryObject
 
         if (auto stored = property.id in _values)
             return Value(*stored);
+
+        if (metadata.inherits)
+        {
+            Value inherited;
+            auto ancestor = inheritanceParent;
+            if (ancestor !is null && ancestor.findInheritedValue(property, inherited))
+                return inherited;
+        }
 
         return Value(metadata.defaultValue);
     }
@@ -82,6 +92,16 @@ class CherryObject
 
 protected:
    /**
+    * The object that supplies inherited property values, or null when this
+    * object has no inheritance context.  Element overrides this to return
+    * its tree parent; plain property-bearing objects do not inherit.
+    */
+    @property inout(CherryObject) inheritanceParent() inout pure nothrow @nogc
+    {
+        return null;
+    }
+
+   /**
     * Core assignment path.  Bypasses the read-only guard so derived classes
     * can set read-only properties internally (mirrors WPF's key-based set).
     */
@@ -114,6 +134,24 @@ protected:
     }
 
 private:
+   /*
+    * Walks the inheritance chain starting at this object, looking for the
+    * nearest locally set value of the property.  The caller has already
+    * checked its own local store, so this is invoked on the parent.
+    * Recursive because a const class reference cannot be rebound in a loop.
+    */
+    bool findInheritedValue(immutable(Property) property, out Value result) const
+    {
+        if (auto stored = property.id in _values)
+        {
+            result = Value(*stored);
+            return true;
+        }
+
+        auto ancestor = inheritanceParent;
+        return ancestor !is null && ancestor.findInheritedValue(property, result);
+    }
+
     immutable(PropertyMetadata) resolveMetadata(immutable(Property) property) const
     {
         auto dynamicType = rtti;
