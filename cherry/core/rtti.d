@@ -759,7 +759,10 @@ auto getRtti(T)()
             if (instance.get is null)
             {
                 instance = makeRtti!T();
-                static if (is(T == class))
+                // Only unqualified classes: typeid(const C) is a
+                // TypeInfo_Const without .name, and a live object's
+                // typeid(this) always names the unqualified type anyway.
+                static if (is(T == class) && is(T == Unqual!T))
                     registerClassRtti(typeid(T).name, instance.get);
             }
             instantiated = true;
@@ -1118,4 +1121,16 @@ unittest
     assert(getRtti!(double[]) is getRtti!(double[]));
     assert(getRtti!(int[string]) is getRtti!(int[string]));
     assert(getRtti!int !is getRtti!uint);
+}
+
+unittest
+{
+    static class Q {}
+
+    // RTTI for a qualified class type must compile, and it must not replace
+    // the unqualified registry entry that live objects resolve through.
+    auto plain  = getRtti!Q;
+    auto constQ = getRtti!(const Q);
+    assert(constQ.qualifiers == Rtti.Qualifier.Const);
+    assert(rttiForName(typeid(Q).name) is plain);
 }

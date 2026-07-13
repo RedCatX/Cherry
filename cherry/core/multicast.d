@@ -146,7 +146,7 @@ if (isDelegate!D || isFunctionPointer!D)
 
 	bool opCast(T : bool)() const nothrow pure @nogc @trusted
 	{
-		return _delegates.length > 0;
+		return (_delegates.length & ~needsCopyBit) != 0;
 	}
 
 	ReturnType!D _invokeImpl(Parameters!D params) const @trusted
@@ -396,4 +396,21 @@ if (isDelegate!D || isFunctionPointer!D)
 	stack = null;
 	copy(stack);
 	assert(stack == [2]);
+}
+@safe unittest
+{
+    alias Del = void function() @safe;
+    static void f() @safe {}
+
+    // The postblit sets the copy-on-write bit inside the length/accessMask
+    // union; empty() and opCast!bool must both mask it out.
+    Multicast!Del m;
+    auto emptyCopy = m;
+    assert(emptyCopy.empty);
+    assert(!emptyCopy);
+
+    m ~= &f;
+    auto fullCopy = m;
+    assert(!fullCopy.empty);
+    assert(cast(bool) fullCopy);
 }

@@ -711,3 +711,14 @@ unittest
         assert( Value(s1).toHash() == Value(s2).toHash() );
     }
 }
+
+unittest
+{
+    static class K {}
+
+    // Regression: this goes through opAssign!(const K) -> getRtti!(const K),
+    // which used to fail to compile inside the class-RTTI registration.
+    const K k = new K;
+    Value v = k;
+    assert(v.get!(const K) is k);
+}
