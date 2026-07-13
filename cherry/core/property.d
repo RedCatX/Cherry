@@ -343,6 +343,34 @@ unittest
     assert(meta.onCoerceValue == &fun4);
 }
 
+/**
+ * Grants the right to set a read-only property.
+ *
+ * A key is returned only by Property.registerReadOnly and
+ * Property.registerAttachedReadOnly; the private constructor makes it
+ * unforgeable outside this module.  The registering code keeps the key
+ * private and publishes key.property for readers, so possession of the key
+ * is the write permission (the analogue of WPF's DependencyPropertyKey).
+ */
+final immutable class ReadOnlyPropertyKey
+{
+   /**
+    * The read-only property this key can write.
+    */
+    @property immutable(Property) property() pure const nothrow
+    {
+        return _property;
+    }
+
+private:
+    this(immutable(Property) property)
+    {
+        _property = property;
+    }
+
+    Property _property;
+}
+
 final immutable class Property
 {
    /**
@@ -392,7 +420,7 @@ final immutable class Property
     /**
     * Register a new read-only property.
     * Calling this version restricts the property such that it can only  
-    * be set via the corresponding overload of CherryObject.SetValue.
+    * be set via the CherryObject.setValue overload taking the returned key.
     *
     * Params:
     *     name = Name of property
@@ -404,7 +432,7 @@ final immutable class Property
     * Returns:
     *     A new registred immutable Property object
     */
-    static immutable(Property) registerReadOnly(string name, 
+    static immutable(ReadOnlyPropertyKey) registerReadOnly(string name, 
 												immutable(Rtti) type,
 												immutable(RttiClassType) ownerType,                                                      
                                                 PropertyMetadata metadata = PropertyMetadata.init,
@@ -412,13 +440,13 @@ final immutable class Property
     {
         auto property = register(name, type, ownerType, metadata, validateValueCallback);
         PropertyRegistry.get().setFlag(property._id, Flags.isReadOnlyProperty, true);
-        return property;
+        return new immutable(ReadOnlyPropertyKey)(property);
     }
 
    /**
     * Register a new attached read-only property.
     * Calling this version restricts the property such that it can only  
-    * be set via the corresponding overload of CherryObject.SetValue.
+    * be set via the CherryObject.setValue overload taking the returned key.
     *
     * Params:
     *     name = Name of property
@@ -428,9 +456,9 @@ final immutable class Property
     *     validateValueCallback = Provides additional value validation outside automatic type validation
     *
     * Returns:
-    *     A new registred immutable ReadOnlyProperty struct
+    *     The registration key; the property itself is exposed via key.property
     */
-    static immutable(Property) registerAttachedReadOnly(string name, 
+    static immutable(ReadOnlyPropertyKey) registerAttachedReadOnly(string name, 
 														immutable(Rtti) type,
 														immutable(RttiClassType) ownerType, 
                                                         PropertyMetadata defaultMetadata = PropertyMetadata.init,
@@ -450,7 +478,7 @@ final immutable class Property
         PropertyRegistry.get().setFlag(property._id, Flags.isAttachedProperty, true);
         PropertyRegistry.get().setFlag(property._id, Flags.isReadOnlyProperty, true);
 
-        return property;
+        return new immutable(ReadOnlyPropertyKey)(property);
     }
 
    /**
@@ -522,7 +550,9 @@ final immutable class Property
 		    validateDefaultValue(typeMetadata.defaultValue, _type, _onValidateValue, buildFullName(_ownerType));
 		}
 
-        if ( !_ownerType.isAssignableFrom(forType) )
+        // Attached properties may be customized for any host type;
+        // only regular properties are restricted to the owner's hierarchy.
+        if ( !isAttached && !_ownerType.isAssignableFrom(forType) )
 		{
             throw new Exception(buildFullName(_ownerType) ~ ": overriding metadata does not match base metadata type");
 		}
@@ -596,6 +626,14 @@ private:
         _ownerType = ownerType;
 
         string fullName = buildFullName(ownerType);
+
+        // Validate a user-supplied default before the property is added to
+        // the registry, so a failed registration stays atomic and the error
+        // surfaces at the registration site, not at first use.
+        if ( defaultMetadata.defaultValueWasSet() )
+        {
+            validateDefaultValue(defaultMetadata.defaultValue, type, validateValueCallback, fullName);
+        }
 
         if ( !defaultMetadata.defaultValueWasSet() )
 		{
@@ -829,4 +867,84 @@ unittest
 
     assert(Test.testProperty !is null);
     
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+
+    static class AttachOwner : CherryObject
+    {
+    }
+
+    static class ForeignHost : CherryObject
+    {
+    }
+
+    // A type-mismatched user-supplied default is rejected at registration
+    // time, on every registration path.
+    PropertyMetadata bad;
+    bad.defaultValue = Value("oops");
+    assertThrown(Property.register("BadDefault", getRtti!int(), getRtti!AttachOwner(), bad));
+    assertThrown(Property.registerAttached("BadDefault", getRtti!int(), getRtti!AttachOwner(), bad));
+
+    // A failed registration does not reserve the property name.
+    PropertyMetadata good;
+    good.defaultValue = Value(5);
+    auto recovered = Property.register("BadDefault", getRtti!int(), getRtti!AttachOwner(), good);
+    assert(recovered.defaultMetadata.defaultValue.get!int == 5);
+
+    // An attached property's metadata can be overridden for a host type
+    // unrelated to the owner; a regular property still cannot.
+    PropertyMetadata baseMeta;
+    baseMeta.defaultValue = Value(1);
+    auto attached = Property.registerAttached("ForeignOverride", getRtti!int(), getRtti!AttachOwner(), baseMeta);
+    auto regular  = Property.register("ForeignOverride2", getRtti!int(), getRtti!AttachOwner(), baseMeta);
+
+    PropertyMetadata hostMeta;
+    hostMeta.defaultValue = Value(42);
+    attached.overrideMetadata(getRtti!ForeignHost(), hostMeta);
+    assert(attached.getMetadata(getRtti!ForeignHost()).defaultValue.get!int == 42);
+    assert(attached.getMetadata(getRtti!AttachOwner()).defaultValue.get!int == 1);
+
+    PropertyMetadata hostMeta2;
+    hostMeta2.defaultValue = Value(42);
+    assertThrown(regular.overrideMetadata(getRtti!ForeignHost(), hostMeta2));
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+
+    static class Secured : CherryObject
+    {
+    }
+
+    PropertyMetadata meta;
+    meta.defaultValue = Value(1);
+
+    auto key = Property.registerReadOnly("Locked", getRtti!int(), getRtti!Secured(), meta);
+    auto lockedProperty = key.property;
+    assert(lockedProperty.isReadOnly);
+    assert(!lockedProperty.isAttached);
+
+    auto obj = new Secured;
+
+    // The public setter rejects a read-only property...
+    assertThrown(obj.setValue(lockedProperty, Value(5)));
+    assert(obj.getValue(lockedProperty).get!int == 1);
+
+    // ...while possession of the key is the write permission.
+    obj.setValue(key, Value(5));
+    assert(obj.getValue(lockedProperty).get!int == 5);
+
+    // Attached read-only: the owner's key sets the value on foreign hosts.
+    auto attachedKey = Property.registerAttachedReadOnly("LockedAttached", getRtti!int(), getRtti!Secured(), meta);
+    assert(attachedKey.property.isReadOnly);
+    assert(attachedKey.property.isAttached);
+
+    auto host = new CherryObject;
+    assertThrown(host.setValue(attachedKey.property, Value(7)));
+    host.setValue(attachedKey, Value(7));
+    assert(host.getValue(attachedKey.property).get!int == 7);
 }
