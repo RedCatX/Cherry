@@ -72,6 +72,20 @@ class CherryObject
     }
 
    /**
+    * Assigns a new value to a read-only property.  Possession of the
+    * registration key is the write permission: keys cannot be created
+    * outside the property module, so only code the owner shared the key
+    * with can take this path.
+    */
+    void setValue(immutable(ReadOnlyPropertyKey) key, Value value)
+    in {
+        assert(key !is null);
+    }
+    do {
+        setValueCore(key.property, value);
+    }
+
+   /**
     * Removes any locally set value, reverting the property to its default.
     */
     void clearValue(immutable(Property) property)
@@ -101,9 +115,11 @@ protected:
         return null;
     }
 
-   /**
-    * Core assignment path.  Bypasses the read-only guard so derived classes
-    * can set read-only properties internally (mirrors WPF's key-based set).
+private:
+   /*
+    * Core assignment path: type-check, validate, coerce, store, notify.
+    * Bypasses the read-only guard; external code reaches it only through
+    * the ReadOnlyPropertyKey overload of setValue.
     */
     void setValueCore(immutable(Property) property, Value value)
     {
