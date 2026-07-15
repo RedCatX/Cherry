@@ -58,6 +58,11 @@ final class Win32Window : PlatformWindow
         SetWindowTextW(_hwnd, title.toUTF16z());
     }
 
+    void invalidate()
+    {
+        InvalidateRect(_hwnd, null, FALSE);
+    }
+
     void setClientSize(int width, int height)
     {
         auto rect = RECT(0, 0, width, height);
@@ -102,6 +107,17 @@ private:
             case WM_SIZE:
                 notify({ _host.onResized(LOWORD(lParam), HIWORD(lParam)); });
                 return 0;
+
+            case WM_PAINT:
+            {
+                // BeginPaint/EndPaint validate the dirty region; Direct2D
+                // presents through its own surface.
+                PAINTSTRUCT ps;
+                BeginPaint(hwnd, &ps);
+                notify({ _host.onPaintRequested(); });
+                EndPaint(hwnd, &ps);
+                return 0;
+            }
 
             case WM_LBUTTONDOWN:
                 notify({ _host.onMouseDown(MouseButton.left, mouseX(lParam), mouseY(lParam)); });

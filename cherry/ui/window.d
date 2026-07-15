@@ -85,6 +85,14 @@ class Window : Element
     }
 
    /**
+    * Schedules a repaint of the window content.
+    */
+    void invalidate()
+    {
+        _platform.invalidate();
+    }
+
+   /**
     * Destroys the native window; onClosed is raised afterwards.
     */
     void close()
@@ -125,6 +133,11 @@ private:
             this.outer.handleResized(width, height);
         }
 
+        void onPaintRequested()
+        {
+            this.outer.handlePaintRequested();
+        }
+
         void onMouseDown(MouseButton button, int x, int y)
         {
             this.outer.raiseEvent(new MouseEventArgs(mouseDownEvent, button, x, y));
@@ -143,12 +156,44 @@ private:
 
     void handleDestroyed()
     {
+        handleDisposedRenderer();
+
         if (!onClosed.empty)
             onClosed(this);
     }
 
+    void handlePaintRequested()
+    {
+        // The renderer is created on the first real paint request: fakes
+        // without a native handle (headless tests) never get here.
+        if (_renderer is null)
+        {
+            if (_platform.nativeHandle is null)
+                return;
+
+            _renderer = createWindowRenderer(_platform);
+        }
+
+        _renderer.render((DrawingContext context) {
+            context.clear(Color.white);
+            renderSubtree(context);
+        });
+    }
+
+    void handleDisposedRenderer()
+    {
+        if (_renderer !is null)
+        {
+            _renderer.dispose();
+            _renderer = null;
+        }
+    }
+
     void handleResized(int width, int height)
     {
+        if (_renderer !is null)
+            _renderer.resize(width, height);
+
         // Reflect the platform size into the properties without echoing it
         // back through the change callbacks.
         _syncingFromPlatform = true;
@@ -178,6 +223,7 @@ private:
     }
 
     PlatformWindow _platform;
+    WindowRenderer _renderer;
     bool _syncingFromPlatform;
 }
 
@@ -196,6 +242,7 @@ version (unittest)
         bool visible;
         bool destroyed;
         int sizePushes;
+        int invalidations;
 
         this(PlatformWindowHost host)
         {
@@ -212,6 +259,8 @@ version (unittest)
         }
 
         void setTitle(string value) { title = value; }
+
+        void invalidate() { invalidations++; }
 
         void setClientSize(int w, int h)
         {
@@ -294,4 +343,20 @@ unittest
     assert(seen.x == 10 && seen.y == 20);
     assert(seen.source is window);
     assert(!seen.handled);
+}
+
+unittest
+{
+    // invalidate() forwards to the platform.
+    TestPlatformWindow platform;
+    auto window = new Window((PlatformWindowHost host) {
+        platform = new TestPlatformWindow(host);
+        return cast(PlatformWindow) platform;
+    });
+
+    window.invalidate();
+    assert(platform.invalidations == 1);
+
+    // A paint request on a handle-less fake is a no-op (no renderer).
+    platform.host.onPaintRequested();
 }

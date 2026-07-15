@@ -1,6 +1,7 @@
 module cherry.platform;
 
 public import cherry.platform.eventloop;
+public import cherry.platform.render;
 public import cherry.platform.window;
 
 /**
@@ -39,5 +40,26 @@ PlatformWindow createPlatformWindow(PlatformWindowHost host)
     else
     {
         assert(false, "No platform window implementation for this platform yet.");
+    }
+}
+
+/**
+ * Creates a renderer for a native window.  A platform-inspection point like
+ * the other create* factories.
+ */
+WindowRenderer createWindowRenderer(PlatformWindow window)
+in {
+    assert(window !is null);
+    assert(window.nativeHandle !is null);
+}
+do {
+    version (Windows)
+    {
+        import cherry.platform.win32.render : D2DWindowRenderer;
+        return new D2DWindowRenderer(window.nativeHandle);
+    }
+    else
+    {
+        assert(false, "No renderer implementation for this platform yet.");
     }
 }
