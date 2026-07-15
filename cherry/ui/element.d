@@ -1,6 +1,7 @@
 module cherry.ui.element;
 
 import cherry.core.obj;
+import cherry.platform.render : DrawingContext;
 import cherry.ui.event;
 
 /**
@@ -124,6 +125,23 @@ class Element : CherryObject
             child._parent = null;
             child.onDetached(this);
         }
+    }
+
+   /**
+    * Renders this element and its whole subtree in depth-first pre-order:
+    * parents draw under their children.  Layout will later add clipping and
+    * per-element coordinate spaces; for now every element draws in the
+    * window's coordinate space.
+    */
+    final void renderSubtree(DrawingContext context)
+    in {
+        assert(context !is null);
+    }
+    do {
+        onRender(context);
+
+        foreach (child; _children)
+            child.renderSubtree(context);
     }
 
    /**
@@ -259,6 +277,14 @@ class Element : CherryObject
     }
 
 protected:
+   /**
+    * Draws this element's own content.  The default element draws nothing;
+    * controls override this.
+    */
+    void onRender(DrawingContext context)
+    {
+    }
+
    /**
     * Inherited property values flow down the element tree: the inheritance
     * context of an element is its tree parent.
@@ -601,4 +627,50 @@ unittest
     // Non-inheriting properties never flow down the tree.
     root.setValue(plainProperty, Value(99));
     assert(label.getValue(plainProperty).get!int == 7);
+}
+
+unittest
+{
+    import cherry.platform.render : Color, Point, Rect;
+
+    // The render walk visits the subtree in depth-first pre-order, so
+    // parents paint under their children.
+    static class NullContext : DrawingContext
+    {
+        void clear(Color color) { }
+        void fillRectangle(Rect rect, Color color) { }
+        void drawRectangle(Rect rect, Color color, float strokeWidth = 1) { }
+        void fillEllipse(Rect bounds, Color color) { }
+        void drawEllipse(Rect bounds, Color color, float strokeWidth = 1) { }
+        void drawLine(Point from, Point to, Color color, float strokeWidth = 1) { }
+    }
+
+    static string[] renderLog;
+
+    static class Painter : Element
+    {
+        string tag;
+
+        this(string tag)
+        {
+            this.tag = tag;
+        }
+
+        protected override void onRender(DrawingContext context)
+        {
+            renderLog ~= tag;
+        }
+    }
+
+    auto root = new Painter("root");
+    auto a = new Painter("a");
+    auto b = new Painter("b");
+    auto c = new Painter("c");
+    root.addChild(a);
+    root.addChild(b);
+    a.addChild(c);
+
+    renderLog = null;
+    root.renderSubtree(new NullContext);
+    assert(renderLog == ["root", "a", "c", "b"]);
 }

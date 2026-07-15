@@ -29,6 +29,9 @@ interface PlatformWindowHost
     /// The client area changed size.
     void onResized(int width, int height);
 
+    /// The platform asks for the window content to be redrawn.
+    void onPaintRequested();
+
     /// Mouse input in client coordinates.
     void onMouseDown(MouseButton button, int x, int y);
     /// ditto
@@ -57,6 +60,9 @@ interface PlatformWindow
 
     /// Requests a client-area size.
     void setClientSize(int width, int height);
+
+    /// Asks the platform to schedule a repaint (onPaintRequested follows).
+    void invalidate();
 
     @property int clientWidth();
     @property int clientHeight();
