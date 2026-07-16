@@ -1,4 +1,4 @@
-module cherry.ui.dispatcher;
+module cherry.core.dispatcher;
 
 import core.atomic : atomicLoad, atomicStore;
 import core.sync.mutex : Mutex;
