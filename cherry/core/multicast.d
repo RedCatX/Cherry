@@ -414,3 +414,118 @@ if (isDelegate!D || isFunctionPointer!D)
     assert(!fullCopy.empty);
     assert(cast(bool) fullCopy);
 }
+
+/**
+ * Marks a public event accessor.  Collected into RttiClassType.eventNames
+ * when the class RTTI is built, so tooling and the future JUICE runtime can
+ * discover a class's events:
+ * ---
+ * private Multicast!(void delegate(Timer)) _onTick;
+ *
+ * @event @property EventAccessor!(void delegate(Timer)) onTick()
+ * {
+ *     return eventAccessor(&_onTick);
+ * }
+ * ---
+ */
+// The event accessor below stores and invokes handler-wrapping delegates
+// whose safety cannot be verified here (a routed event's add/remove touch
+// @system Element methods), so this section opts out of the module @safe.
+@system:
+
+struct event
+{
+}
+
+/**
+ * Subscription-only view of an event: exposes `~=` and `-=` over a pair of
+ * add/remove operations, hiding how handlers are stored.  A single type
+ * serves both event tiers -- plain (Multicast-backed) and routed -- because
+ * only those two operations differ, and they are supplied at construction
+ * (the C# add/remove model).  Raising the event and clearing the handler
+ * list stay with the owner.
+ *
+ * H is the handler type (a delegate or function pointer).  Build one with a
+ * factory: eventAccessor(&field) for a plain event, or
+ * cherry.ui.event.routedAccessor(element, event) for a routed one; use the
+ * constructor directly for custom add/remove logic.
+ */
+struct EventAccessor(H)
+{
+    this(void delegate(H) add, void delegate(H) remove) pure nothrow @nogc
+    in {
+        assert(add !is null && remove !is null);
+    }
+    do {
+        _add = add;
+        _remove = remove;
+    }
+
+    /// Subscribes a handler.
+    void opOpAssign(string op : "~")(H handler)
+    {
+        _add(handler);
+    }
+
+    /// Unsubscribes a handler.
+    void opOpAssign(string op : "-")(H handler)
+    {
+        _remove(handler);
+    }
+
+private:
+    void delegate(H) _add;
+    void delegate(H) _remove;
+}
+
+/**
+ * Builds an EventAccessor over a private Multicast field -- the common case
+ * for a plain event:
+ * ---
+ * @event @property auto onTick() { return eventAccessor(&_onTick); }
+ * ---
+ */
+EventAccessor!H eventAccessor(H)(Multicast!H* field)
+in {
+    assert(field !is null);
+}
+do {
+    return EventAccessor!H((H h) { field.add(h); }, (H h) { field.remove(h); });
+}
+
+unittest
+{
+    // EventAccessor over a private Multicast: subscribers see only ~= / -=,
+    // the owner raises through the field.
+    static class Counter
+    {
+        private Multicast!(void delegate()) _onChanged;
+
+        @event @property auto onChanged()
+        {
+            return eventAccessor(&_onChanged);
+        }
+
+        void bump()
+        {
+            if (!_onChanged.empty)
+                _onChanged();
+        }
+    }
+
+    int notified;
+    auto counter = new Counter;
+    auto handler = delegate() { notified++; };
+
+    counter.onChanged ~= handler;
+    counter.bump();
+    assert(notified == 1);
+
+    counter.onChanged ~= handler;   // registered twice
+    counter.bump();
+    assert(notified == 3);
+
+    counter.onChanged -= handler;   // removes every registration of handler
+    counter.bump();
+    assert(notified == 3);
+}

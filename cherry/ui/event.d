@@ -1,5 +1,6 @@
 module cherry.ui.event;
 
+import cherry.core.multicast : EventAccessor, event;
 import cherry.core.rtti;
 import cherry.ui.element;
 
@@ -163,56 +164,28 @@ private:
 }
 
 /**
- * Instance-bound accessor for a routed event, enabling the Delphi/C#-style
- * subscription syntax:
+ * Builds an EventAccessor for a routed event on an element -- the routed
+ * counterpart of the plain eventAccessor(&field).  The accessor's `~=` and
+ * `-=` forward to the element's addEventHandler/removeEventHandler, giving
+ * the Delphi/C#-style subscription syntax:
  * ---
- * button.onClick ~= &onButtonClick;    // addEventHandler
- * button.onClick -= &onButtonClick;    // removeEventHandler
+ * @event @property auto onClick() { return routedAccessor(this, clickEvent); }
+ *
+ * button.onClick ~= &onButtonClick;
+ * button.onClick -= &onButtonClick;
  * ---
- * A control exposes one accessor property per event:
- * ---
- * @property EventAccessor onClick()
- * {
- *     return EventAccessor(this, clickEvent);
- * }
- * ---
- * The accessor only pairs an element with an event and is read-only by
- * construction (private fields, no setters); it cannot be declared
- * immutable because subscribing mutates the referenced element.
  * Subscribing with handledEventsToo still requires an explicit
  * addEventHandler call.
  */
-struct EventAccessor
-{
-    this(Element element, immutable(RoutedEvent) event) pure nothrow @nogc
-    in {
-        assert(element !is null);
-        assert(event !is null);
-    }
-    do {
-        _element = element;
-        _event = event;
-    }
-
-   /**
-    * Subscribes the handler to the event on the bound element.
-    */
-    void opOpAssign(string op : "~")(RoutedEventHandler handler)
-    {
-        _element.addEventHandler(_event, handler);
-    }
-
-   /**
-    * Removes one registration of the handler from the bound element.
-    */
-    void opOpAssign(string op : "-")(RoutedEventHandler handler)
-    {
-        _element.removeEventHandler(_event, handler);
-    }
-
-private:
-    Element                 _element;
-    immutable(RoutedEvent)  _event;
+EventAccessor!RoutedEventHandler routedAccessor(Element element, immutable(RoutedEvent) event)
+in {
+    assert(element !is null);
+    assert(event !is null);
+}
+do {
+    return EventAccessor!RoutedEventHandler(
+        (RoutedEventHandler h) { element.addEventHandler(event, h); },
+        (RoutedEventHandler h) { element.removeEventHandler(event, h); });
 }
 
 /**
@@ -395,7 +368,7 @@ unittest
 
 unittest
 {
-    // The Delphi-style subscription syntax through EventAccessor.
+    // The Delphi-style subscription syntax through routedAccessor.
     //
     // A real control registers its events in a shared static this of its own
     // module and stores them in static immutable fields; here the event is
@@ -409,9 +382,9 @@ unittest
             _clickEvent = clickEvent;
         }
 
-        @property EventAccessor onClick()
+        @event @property auto onClick()
         {
-            return EventAccessor(this, _clickEvent);
+            return routedAccessor(this, _clickEvent);
         }
 
         private immutable(RoutedEvent) _clickEvent;
@@ -436,7 +409,7 @@ unittest
     assert(log == ["clicked"]);
 
     // Handlers added through an accessor participate in routing as usual.
-    auto panelClick = EventAccessor(panel, clickEvent);
+    auto panelClick = routedAccessor(panel, clickEvent);
     panelClick ~= (Element sender, RoutedEventArgs args) { log ~= "panel"; };
     log = null;
     button.raiseEvent(new RoutedEventArgs(clickEvent));

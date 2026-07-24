@@ -2,6 +2,8 @@ module cherry.core.rtti;
 
 import std.traits;
 
+import cherry.core.multicast : event;
+
 class Rtti
 {
     enum Type
@@ -608,6 +610,16 @@ class RttiClassType : Rtti
         return _isInterface;
     }
 
+   /**
+    * Names of the class's own public event accessors (@event members).
+    * Events of base classes live on the base classes' RTTI: walk baseClass
+    * to collect the full set.
+    */
+    @property const(string[]) eventNames() pure const nothrow
+    {
+        return _eventNames;
+    }
+
     // Protected constructor, use getRtti to create instance of RttiClassType
     protected immutable this(const string name, 
                              size_t size, 
@@ -615,18 +627,21 @@ class RttiClassType : Rtti
                              immutable(RttiClassType)[] baseTypes, 
                              immutable(RttiClassType) baseClass,
                              bool isInterface,
+                             immutable(string[]) eventNames,
                              Rtti.Qualifier qualifiers)
     {
         super(name, size, initPtr, Rtti.Type.Class, qualifiers);
         _baseTypes = baseTypes;
         _baseClass = baseClass;
         _isInterface = isInterface;
+        _eventNames = eventNames;
     }
 
 private:
     immutable(RttiClassType)[] _baseTypes;
     immutable(RttiClassType) _baseClass;
     bool _isInterface;
+    string[] _eventNames;
 }
 
 class RttiStructType : Rtti
@@ -894,12 +909,36 @@ private auto makeRtti(T)()
                 baseClass = cast(RttiClassType) getRtti!BT;
 		}
 
+        // Collect the class's own members annotated with @event, so the
+        // JUICE runtime and tooling can discover events by reflection.
+        string[] eventNames;
+        static foreach (memberName; __traits(derivedMembers, T))
+        {{
+            bool isEventMember = false;
+
+            static if (__traits(compiles, __traits(getOverloads, T, memberName)))
+            {
+                static foreach (overload; __traits(getOverloads, T, memberName))
+                {
+                    static if (__traits(compiles, hasUDA!(overload, event)))
+                    {
+                        static if (hasUDA!(overload, event))
+                            isEventMember = true;
+                    }
+                }
+            }
+
+            if (isEventMember)
+                eventNames ~= memberName;
+        }}
+
         return new immutable(RttiClassType)(fullyQualifiedName!T, 
 											T.sizeof, 
 											typeid(T).initializer.ptr, 
 											baseTypes, 
 											cast(immutable(RttiClassType)) baseClass, 
 											is(T == interface), 
+												cast(immutable(string[])) eventNames, 
 											qualifiers);
     }
     else static if (is(T == struct))
@@ -1133,4 +1172,48 @@ unittest
     auto constQ = getRtti!(const Q);
     assert(constQ.qualifiers == Rtti.Qualifier.Const);
     assert(rttiForName(typeid(Q).name) is plain);
+}
+
+unittest
+{
+    import std.algorithm : canFind;
+    import cherry.core.multicast : EventAccessor, Multicast, eventAccessor;
+
+    static class Emitter
+    {
+        private Multicast!(void delegate()) _onPing;
+        private Multicast!(void delegate()) _onPong;
+
+        @event @property EventAccessor!(void delegate()) onPing()
+        {
+            return eventAccessor(&_onPing);
+        }
+
+        @event @property EventAccessor!(void delegate()) onPong()
+        {
+            return eventAccessor(&_onPong);
+        }
+
+        @property int notAnEvent()
+        {
+            return 0;
+        }
+    }
+
+    static class Silent
+    {
+        void method()
+        {
+        }
+    }
+
+    // @event members are collected into the class RTTI; everything else is
+    // left alone.
+    auto emitter = getRtti!Emitter;
+    assert(emitter.eventNames.length == 2);
+    assert(emitter.eventNames.canFind("onPing"));
+    assert(emitter.eventNames.canFind("onPong"));
+    assert(!emitter.eventNames.canFind("notAnEvent"));
+
+    assert(getRtti!Silent.eventNames.length == 0);
 }

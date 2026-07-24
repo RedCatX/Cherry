@@ -48,8 +48,13 @@ class Window : Element
    /**
     * Raised after the native window has been destroyed.  A plain Multicast
     * event: window lifetime is not a tree concern, so it does not route.
+    * Declared through the @event accessor pattern: subscription-only from
+    * the outside, raised only by the window itself.
     */
-    Multicast!(void delegate(Window)) onClosed;
+    @event @property auto onClosed()
+    {
+        return eventAccessor(&_onClosed);
+    }
 
    /**
     * Creates a window backed by the platform's native implementation.
@@ -158,8 +163,8 @@ private:
     {
         handleDisposedRenderer();
 
-        if (!onClosed.empty)
-            onClosed(this);
+        if (!_onClosed.empty)
+            _onClosed(this);
     }
 
     void handlePaintRequested()
@@ -224,6 +229,7 @@ private:
 
     PlatformWindow _platform;
     WindowRenderer _renderer;
+    Multicast!(void delegate(Window)) _onClosed;
     bool _syncingFromPlatform;
 }
 
@@ -359,4 +365,12 @@ unittest
 
     // A paint request on a handle-less fake is a no-op (no renderer).
     platform.host.onPaintRequested();
+}
+
+unittest
+{
+    // @event members surface through the class RTTI (for JUICE and tooling).
+    import std.algorithm : canFind;
+
+    assert(getRtti!Window.eventNames.canFind("onClosed"));
 }
