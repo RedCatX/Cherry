@@ -64,21 +64,21 @@ shared static this()
  * Subscription accessors for the mouse events, usable on any element via
  * UFCS: `window.onMouseDown ~= &handler;`.
  */
-@property EventAccessor onMouseDown(Element element)
+@property auto onMouseDown(Element element)
 {
-    return EventAccessor(element, mouseDownEvent);
+    return routedAccessor(element, mouseDownEvent);
 }
 
 /// ditto
-@property EventAccessor onMouseUp(Element element)
+@property auto onMouseUp(Element element)
 {
-    return EventAccessor(element, mouseUpEvent);
+    return routedAccessor(element, mouseUpEvent);
 }
 
 /// ditto
-@property EventAccessor onMouseMove(Element element)
+@property auto onMouseMove(Element element)
 {
-    return EventAccessor(element, mouseMoveEvent);
+    return routedAccessor(element, mouseMoveEvent);
 }
 
 unittest
