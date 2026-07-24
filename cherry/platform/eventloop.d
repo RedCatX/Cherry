@@ -18,20 +18,29 @@ interface EventLoop
     *
     * onWake is invoked on this thread once on entry (draining work queued
     * before the loop started) and then after every wake request.
+    *
+    * Deliberately not shared: only the owning thread may pump the loop, and
+    * the unshared reference is what expresses that.
     */
     void run(scope void delegate() onWake);
 
    /**
-    * Thread-safe: makes run return.  A wake request already pending at that
-    * moment is still delivered first.
+    * Makes run return.  A wake request already pending at that moment is
+    * still delivered first.
+    *
+    * Shared: callable from any thread.  Other threads hold a shared view of
+    * the loop, through which quit and requestWake are the only operations
+    * available.
     */
-    void quit();
+    void quit() shared;
 
    /**
-    * Thread-safe: schedules an onWake invocation on the loop thread.
-    * Consecutive requests may coalesce into a single invocation.
+    * Schedules an onWake invocation on the loop thread.  Consecutive
+    * requests may coalesce into a single invocation.
+    *
+    * Shared: callable from any thread.
     */
-    void requestWake();
+    void requestWake() shared;
 }
 
 /**
@@ -74,21 +83,27 @@ final class ManualEventLoop : EventLoop
         }
     }
 
-    void quit()
+    void quit() shared
     {
-        synchronized (_mutex)
+        // The mutex serializes every access to the flags; the cast states
+        // what the lock already guarantees.
+        auto self = cast(ManualEventLoop) this;
+
+        synchronized (self._mutex)
         {
-            _quitRequested = true;
-            _condition.notifyAll();
+            self._quitRequested = true;
+            self._condition.notifyAll();
         }
     }
 
-    void requestWake()
+    void requestWake() shared
     {
-        synchronized (_mutex)
+        auto self = cast(ManualEventLoop) this;
+
+        synchronized (self._mutex)
         {
-            _wakeRequested = true;
-            _condition.notifyAll();
+            self._wakeRequested = true;
+            self._condition.notifyAll();
         }
     }
 
@@ -106,10 +121,14 @@ unittest
     auto loop = new ManualEventLoop;
     int wakes;
 
+    // Other threads see the loop through a shared reference, which limits
+    // them to requestWake and quit; run stays with the owning thread.
+    auto remote = cast(shared) loop;
+
     auto worker = new Thread({
         foreach (i; 0 .. 3)
-            loop.requestWake();
-        loop.quit();
+            remote.requestWake();
+        remote.quit();
     });
 
     worker.start();

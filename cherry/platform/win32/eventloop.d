@@ -63,14 +63,16 @@ final class Win32EventLoop : EventLoop
         }
     }
 
-    void quit()
+    void quit() shared
     {
-        PostMessageW(_hwnd, WM_CHERRY_QUIT, 0, 0);
+        // PostMessage is thread-safe by the Win32 contract, so the handle
+        // needs no further synchronization.
+        PostMessageW(cast(HWND) _hwnd, WM_CHERRY_QUIT, 0, 0);
     }
 
-    void requestWake()
+    void requestWake() shared
     {
-        PostMessageW(_hwnd, WM_CHERRY_WAKE, 0, 0);
+        PostMessageW(cast(HWND) _hwnd, WM_CHERRY_WAKE, 0, 0);
     }
 
 private:
@@ -109,10 +111,13 @@ unittest
     auto loop = new Win32EventLoop;
     int wakes;
 
+    // Other threads post through the shared view; run stays on the owner.
+    auto remote = cast(shared) loop;
+
     auto worker = new Thread({
         foreach (i; 0 .. 3)
-            loop.requestWake();
-        loop.quit();
+            remote.requestWake();
+        remote.quit();
     });
 
     worker.start();

@@ -91,7 +91,9 @@ final class Dispatcher
         synchronized (_queueMutex)
             _queue ~= work;
 
-        _loop.requestWake();
+        // Scaffolding: once beginInvoke is itself marked shared, _loop is
+        // seen as shared inside it and this cast can go away.
+        (cast(shared) _loop).requestWake();
     }
 
    /**
@@ -154,7 +156,8 @@ final class Dispatcher
     void shutdown()
     {
         atomicStore(_shutdownRequested, true);
-        _loop.quit();
+        // Scaffolding: drop the cast once shutdown is marked shared.
+        (cast(shared) _loop).quit();
 
         if (Thread.getThis() is _thread && t_current is this)
             t_current = null;
