@@ -39,7 +39,8 @@ void main()
         writefln("mouse %s down at (%s, %s)", mouse.button, mouse.x, mouse.y);
     };
 
-    window.onClosed ~= (Window w) { dispatcher.shutdown(); };
+    // shutdown() is shared -- callable from any thread; run() is not.
+    window.onClosed ~= (Window w) { (cast(shared) dispatcher).shutdown(); };
 
     window.show();
     dispatcher.run();

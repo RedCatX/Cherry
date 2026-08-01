@@ -3,6 +3,7 @@ module cherry.core.obj;
 import cherry.core.rtti;
 import cherry.core.value;
 import cherry.core.property;
+import cherry.core.dispatcher;
 
 /**
  * Base class for every object that participates in the Cherry property system.
@@ -11,8 +12,12 @@ import cherry.core.property;
  * an object only pays for the properties it actually sets; everything else
  * resolves to the (optionally per-type overridden) default carried by the
  * property's metadata.
+ *
+ * Deriving from DispatcherObject binds every instance to the dispatcher of
+ * the thread that created it, which is what makes the affinity checks below
+ * meaningful.
  */
-class CherryObject
+class CherryObject : DispatcherObject
 {
    /**
     * Runtime type information for this instance's dynamic type, or null if no
@@ -35,6 +40,8 @@ class CherryObject
         assert(property !is null);
     }
     do {
+        verifyAccess();
+
         immutable metadata = resolveMetadata(property);
 
         if (auto readOnlyGet = metadata.onGetReadOnlyValue)
