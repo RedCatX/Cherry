@@ -3,6 +3,7 @@ module cherry.platform.win32.eventloop;
 version (Windows):
 
 import core.sys.windows.windows;
+import core.time : Duration;
 
 import cherry.platform.eventloop;
 
@@ -10,6 +11,12 @@ pragma(lib, "user32");
 
 private enum UINT WM_CHERRY_WAKE = WM_APP + 1;
 private enum UINT WM_CHERRY_QUIT = WM_APP + 2;
+private enum UINT_PTR CHERRY_TIMER_ID = 1;
+
+// Not all of these are in druntime's headers; declare what is missing.
+private enum uint QS_EVENT_           = 0x2000;
+private enum uint MWMO_INPUTAVAILABLE_ = 0x0004;
+private enum uint USER_TIMER_MINIMUM_  = 0x0000000A;
 
 /**
  * Win32 implementation of EventLoop: a message-only window receives posted
@@ -58,6 +65,14 @@ final class Win32EventLoop : EventLoop
             if (msg.hwnd is _hwnd && msg.message == WM_CHERRY_QUIT)
                 break;
 
+            if (msg.hwnd is _hwnd && msg.message == WM_TIMER
+                && msg.wParam == CHERRY_TIMER_ID)
+            {
+                KillTimer(_hwnd, CHERRY_TIMER_ID);   // one-shot
+                onWake();
+                continue;
+            }
+
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -73,6 +88,23 @@ final class Win32EventLoop : EventLoop
     void requestWake() shared
     {
         PostMessageW(cast(HWND) _hwnd, WM_CHERRY_WAKE, 0, 0);
+    }
+
+    bool isInputPending()
+    {
+        return MsgWaitForMultipleObjectsEx(0, null, 0,
+                   QS_INPUT | QS_EVENT_, MWMO_INPUTAVAILABLE_) == WAIT_OBJECT_0;
+    }
+
+    void requestWakeAfter(Duration delay)
+    {
+        // Owner-thread only.  SetTimer with a fixed id resets the timer, so
+        // at most one deferred wake is outstanding; WM_TIMER is the
+        // lowest-priority message, firing only after input has drained.
+        auto ms = delay.total!"msecs";
+        if (ms < USER_TIMER_MINIMUM_)
+            ms = USER_TIMER_MINIMUM_;
+        SetTimer(_hwnd, CHERRY_TIMER_ID, cast(UINT) ms, null);
     }
 
 private:

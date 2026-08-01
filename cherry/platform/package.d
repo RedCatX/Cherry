@@ -4,6 +4,19 @@ public import cherry.platform.eventloop;
 public import cherry.platform.render;
 public import cherry.platform.window;
 
+// The backend modules are imported here, at module level, rather than inside
+// the factory bodies below.  A dependency scanner (rdmd, dub) only sees the
+// module-level imports of an imported module -- the function bodies of a
+// non-root module are never analysed, so an import written inside one stays
+// invisible, the backend never gets compiled, and the build fails at link
+// time with unresolved externals.
+version (Windows)
+{
+    import cherry.platform.win32.eventloop : Win32EventLoop;
+    import cherry.platform.win32.render : D2DWindowRenderer;
+    import cherry.platform.win32.window : Win32Window;
+}
+
 /**
  * Creates the native event loop for the current platform, falling back to
  * the portable ManualEventLoop where no native implementation exists yet.
@@ -16,7 +29,6 @@ EventLoop createPlatformEventLoop()
 {
     version (Windows)
     {
-        import cherry.platform.win32.eventloop : Win32EventLoop;
         return new Win32EventLoop;
     }
     else
@@ -34,7 +46,6 @@ PlatformWindow createPlatformWindow(PlatformWindowHost host)
 {
     version (Windows)
     {
-        import cherry.platform.win32.window : Win32Window;
         return new Win32Window(host);
     }
     else
@@ -55,7 +66,6 @@ in {
 do {
     version (Windows)
     {
-        import cherry.platform.win32.render : D2DWindowRenderer;
         return new D2DWindowRenderer(window.nativeHandle);
     }
     else

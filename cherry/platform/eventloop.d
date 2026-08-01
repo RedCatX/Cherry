@@ -1,7 +1,9 @@
 module cherry.platform.eventloop;
 
+import core.atomic : atomicLoad, atomicStore;
 import core.sync.condition : Condition;
 import core.sync.mutex : Mutex;
+import core.time : Duration, MonoTime;
 
 /**
  * The platform seam of the dispatcher: everything the framework needs from
@@ -41,6 +43,25 @@ interface EventLoop
     * Shared: callable from any thread.
     */
     void requestWake() shared;
+
+   /**
+    * Whether native input is waiting to be processed.
+    *
+    * Meaningful only on the loop thread -- it inspects that thread's input
+    * queue -- so it is not shared.  The dispatcher uses it to hold back
+    * background work while the user is actively interacting.
+    */
+    bool isInputPending();
+
+   /**
+    * Schedules a wake no sooner than `delay` from now, replacing any pending
+    * deferred wake (at most one outstanding).  It is ordered behind native
+    * input, so it serves both as the starvation guard for deferred
+    * background work and as the "input has drained" re-wake.
+    *
+    * Owner-thread only, like run: it drives a timer bound to the loop thread.
+    */
+    void requestWakeAfter(Duration delay);
 }
 
 /**
@@ -64,18 +85,33 @@ final class ManualEventLoop : EventLoop
         {
             synchronized (_mutex)
             {
-                while (!_wakeRequested && !_quitRequested)
-                    _condition.wait();
+                while (true)
+                {
+                    // A pending wake is delivered before a pending quit.
+                    if (_wakeRequested)
+                    {
+                        _wakeRequested = false;
+                        break;
+                    }
 
-                // A pending wake is delivered before a pending quit.
-                if (_wakeRequested)
-                {
-                    _wakeRequested = false;
-                }
-                else
-                {
-                    _quitRequested = false;
-                    return;
+                    // A deferred wake whose deadline has arrived is delivered
+                    // as an ordinary wake.
+                    if (_hasDeadline && MonoTime.currTime >= _deadline)
+                    {
+                        _hasDeadline = false;
+                        break;
+                    }
+
+                    if (_quitRequested)
+                    {
+                        _quitRequested = false;
+                        return;
+                    }
+
+                    if (_hasDeadline)
+                        _condition.wait(_deadline - MonoTime.currTime);
+                    else
+                        _condition.wait();
                 }
             }
 
@@ -107,11 +143,37 @@ final class ManualEventLoop : EventLoop
         }
     }
 
+    bool isInputPending()
+    {
+        return atomicLoad(_inputPending);
+    }
+
+    void requestWakeAfter(Duration delay)
+    {
+        // Owner-thread only: this runs from within onWake, when the loop is
+        // not waiting, so a plain field write is enough -- the cross-thread
+        // requestWake/quit never touch the deadline.
+        _deadline = MonoTime.currTime + delay;
+        _hasDeadline = true;
+    }
+
+   /**
+    * Test knob: the value isInputPending will report.  Atomic so a test can
+    * flip it from another thread.
+    */
+    @property void inputPending(bool value)
+    {
+        atomicStore(_inputPending, value);
+    }
+
 private:
-    Mutex     _mutex;
-    Condition _condition;
-    bool      _wakeRequested;
-    bool      _quitRequested;
+    Mutex       _mutex;
+    Condition   _condition;
+    bool        _wakeRequested;
+    bool        _quitRequested;
+    bool        _hasDeadline;
+    MonoTime    _deadline;
+    shared bool _inputPending;
 }
 
 unittest
@@ -138,4 +200,36 @@ unittest
     // One initial drain plus one to three wake deliveries: consecutive
     // requests are allowed to coalesce into a single flag.
     assert(wakes >= 2 && wakes <= 4);
+}
+
+unittest
+{
+    import core.time : msecs, MonoTime;
+
+    // isInputPending mirrors the test knob.
+    auto loop = new ManualEventLoop;
+    assert(!loop.isInputPending());
+    loop.inputPending = true;
+    assert(loop.isInputPending());
+    loop.inputPending = false;
+
+    // requestWakeAfter delivers a wake on its own, with no requestWake/quit,
+    // after roughly the requested delay.
+    int wakes;
+    auto start = MonoTime.currTime;
+    MonoTime secondWakeAt;
+
+    loop.run({
+        wakes++;
+        if (wakes == 1)
+            loop.requestWakeAfter(30.msecs);   // armed from the initial drain
+        else
+        {
+            secondWakeAt = MonoTime.currTime;
+            (cast(shared) loop).quit();
+        }
+    });
+
+    assert(wakes == 2);
+    assert(secondWakeAt - start >= 25.msecs);
 }
