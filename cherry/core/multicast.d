@@ -14,6 +14,22 @@ static if (is(size_t == ulong))
 else
     private enum needsCopyBit = cast(size_t)(1 << (8 * size_t.sizeof - 1));
 
+/**
+ * A list of handlers invoked as a single delegate.
+ *
+ * Not internally synchronized: when a multicast is shared between threads,
+ * the owner supplies the lock.  Handlers must be invoked outside that lock
+ * -- holding it across handler calls invites deadlock -- so take a snapshot
+ * first:
+ * ---
+ * Multicast!D snapshot;
+ * synchronized (mutex)
+ *     snapshot = _handlers.dup;
+ * snapshot(args);
+ * ---
+ * Mutating the original afterwards never disturbs the snapshot: add and
+ * remove replace the array rather than rewriting it in place.
+ */
 struct Multicast(D)
 if (isDelegate!D || isFunctionPointer!D)
 {
@@ -99,19 +115,40 @@ if (isDelegate!D || isFunctionPointer!D)
 		return this;
 	}
 
+	/**
+	 * Removes every registration of the handler.
+	 *
+	 * Always builds a fresh array instead of compacting in place, so any
+	 * copy taken earlier -- a snapshot waiting to be invoked, or the list an
+	 * in-progress invocation is walking -- keeps seeing what it captured.
+	 * The allocation falls on the (rare) removal, never on invocation.
+	 */
 	ref auto remove(const D d) nothrow pure @trusted
 	{
-		if ((_accessMask & needsCopyBit) != 0)
-		{
-			_accessMask &= ~needsCopyBit;
-			_delegates = _delegates.dup.remove!(a => a == d);
-		}
-		else
-		{
-			_delegates = _delegates.remove!(a => a == d);
-		}
+		// The copy bit shares storage with the array length, so clear it
+		// before the length is read.  It stays clear: the new array is ours.
+		_accessMask &= ~needsCopyBit;
+		_delegates = _delegates.dup.remove!(a => a == d);
 
 		return this;
+	}
+
+	/**
+	 * Returns an independent copy of the handler list -- the snapshot half
+	 * of the "copy under the lock, invoke outside it" pattern described on
+	 * the struct.
+	 */
+	Multicast!D dup() const nothrow pure @trusted
+	{
+		// Mask the copy bit out rather than reading _delegates.length, which
+		// shares storage with it.
+		immutable count = _accessMask & ~needsCopyBit;
+
+		Multicast!D result;
+		if (count > 0)
+			result._delegates = (cast(D*) _delegates.ptr)[0 .. count].dup;
+
+		return result;
 	}
 
 	ref auto opAssign(const D d) nothrow pure
@@ -153,15 +190,30 @@ if (isDelegate!D || isFunctionPointer!D)
 	{
 		const copyBit = (_accessMask & needsCopyBit) != 0;
 		cast() _accessMask &= ~needsCopyBit;
+		const ptr = _delegates.ptr;
 		scope (exit)
-			if (copyBit)
+			if (copyBit && _delegates.ptr == ptr)
 				cast() _accessMask |= needsCopyBit;
 
-		assert(_delegates.length > 0, "Tried to call unassigned multicast delegate");
+		// Read the list once: a handler may subscribe or unsubscribe while the
+		// event is being delivered, which replaces the field mid-iteration.
+		auto handlers = _delegates;
 
-		foreach (D d; _delegates[0 .. $ - 1])
+		// Raising an event nobody listens to is a no-op rather than an error.
+		// The alternative makes every call site guard with empty, and forgetting
+		// the guard costs a crash instead of nothing happening.  A handler type
+		// with a return value yields that type's default.
+		if (handlers.length == 0)
+		{
+			static if (is(ReturnType!D == void))
+				return;
+			else
+				return ReturnType!D.init;
+		}
+
+		foreach (D d; handlers[0 .. $ - 1])
 			d(forward!params);
-		return _delegates[$ - 1](forward!params);
+		return handlers[$ - 1](forward!params);
 	}
 
 	auto _invokePtr() const nothrow pure @nogc @trusted
@@ -428,6 +480,109 @@ if (isDelegate!D || isFunctionPointer!D)
  * }
  * ---
  */
+@safe unittest
+{
+	// A snapshot keeps what it captured when the original is mutated
+	// afterwards, which is what makes "copy under the lock, invoke outside
+	// it" safe for a multicast shared between threads.
+	alias Del = void function(ref int[]) @safe;
+
+	static void f1(ref int[] log) @safe { log ~= 1; }
+	static void f2(ref int[] log) @safe { log ~= 2; }
+	static void f3(ref int[] log) @safe { log ~= 3; }
+
+	Multicast!Del original;
+	original ~= &f1;
+	original ~= &f2;
+	original ~= &f3;
+
+	auto snapshot = original.dup;
+	original.remove(&f2);
+
+	int[] fromSnapshot;
+	snapshot(fromSnapshot);
+	assert(fromSnapshot == [1, 2, 3]);
+
+	int[] fromOriginal;
+	original(fromOriginal);
+	assert(fromOriginal == [1, 3]);
+
+	// A plain struct copy carries the same guarantee, in both directions.
+	Multicast!Del other;
+	other ~= &f1;
+	other ~= &f2;
+
+	auto plainCopy = other;
+	other.remove(&f1);
+
+	int[] fromCopy;
+	plainCopy(fromCopy);
+	assert(fromCopy == [1, 2]);
+
+	// dup of an empty multicast is empty and independent.
+	Multicast!Del none;
+	auto noneCopy = none.dup;
+	assert(noneCopy.empty);
+	none ~= &f1;
+	assert(noneCopy.empty);
+}
+
+@safe unittest
+{
+	// A handler may unsubscribe another one while the event is being
+	// delivered: the invocation walks the list captured on entry, and the
+	// change takes effect from the next raise.
+	alias Del = void function(ref int[]) @safe;
+
+	static Multicast!Del target;
+
+	static void first(ref int[] log) @safe { log ~= 1; }
+	static void third(ref int[] log) @safe { log ~= 3; }
+	static void unsubscriber(ref int[] log) @safe
+	{
+		log ~= 2;
+		target.remove(&third);
+	}
+
+	target ~= &first;
+	target ~= &unsubscriber;
+	target ~= &third;
+
+	int[] firstRaise;
+	target(firstRaise);
+	assert(firstRaise == [1, 2, 3]);
+
+	int[] secondRaise;
+	target(secondRaise);
+	assert(secondRaise == [1, 2]);
+}
+
+@safe unittest
+{
+	// Raising an event with no subscribers does nothing, so a raise site
+	// needs no `empty` guard.
+	alias Del = void function(ref int[]) @safe;
+
+	static void f1(ref int[] log) @safe { log ~= 1; }
+
+	Multicast!Del noSubscribers;
+	int[] log;
+	noSubscribers(log);
+	assert(log.length == 0);
+
+	// Still empty after every handler has been removed again.
+	Multicast!Del drained;
+	drained ~= &f1;
+	drained.remove(&f1);
+	drained(log);
+	assert(log.length == 0);
+
+	// A handler type that returns a value yields that type's default.
+	alias IntDel = int function() @safe;
+	Multicast!IntDel noResult;
+	assert(noResult() == 0);
+}
+
 // The event accessor below stores and invokes handler-wrapping delegates
 // whose safety cannot be verified here (a routed event's add/remove touch
 // @system Element methods), so this section opts out of the module @safe.
@@ -508,8 +663,7 @@ unittest
 
         void bump()
         {
-            if (!_onChanged.empty)
-                _onChanged();
+            _onChanged();
         }
     }
 

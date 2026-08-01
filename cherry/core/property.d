@@ -145,8 +145,7 @@ struct PropertyMetadata
     */
     void raisePropertyChanged(const(Object) obj, const(Value) oldValue, const(Value) newValue) const
     {
-        if (!_onPropertyChanged.empty)
-            _onPropertyChanged(obj, oldValue, newValue);
+        _onPropertyChanged(obj, oldValue, newValue);
     }
 
     @property CoerceValueCallback onCoerceValue() pure const nothrow

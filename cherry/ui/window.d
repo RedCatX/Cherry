@@ -163,8 +163,7 @@ private:
     {
         handleDisposedRenderer();
 
-        if (!_onClosed.empty)
-            _onClosed(this);
+        _onClosed(this);
     }
 
     void handlePaintRequested()
