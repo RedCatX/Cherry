@@ -1,6 +1,6 @@
 module cherry.core.dispatcher.dispatcher;
 
-import core.atomic : atomicLoad, atomicStore;
+import core.atomic : atomicLoad, atomicOp, atomicStore;
 import core.sync.mutex : Mutex;
 import core.thread : Thread;
 import core.time : Duration, MonoTime, dur;
@@ -85,6 +85,11 @@ alias DispatcherUnhandledExceptionHandler =
     void delegate(shared(DispatcherOperation) op, Exception exception);
 
 /**
+ * A delegate type for handling the two ends of a dispatcher shutdown.
+ */
+alias DispatcherShutdownHandler = void delegate(shared(Dispatcher) dispatcher);
+
+/**
  * Dispatcher owns a thread's work queue and message loop.
  *
  * A dispatcher is bound to the thread that created it: checkAccess and
@@ -138,6 +143,71 @@ final class Dispatcher : DispatcherObject
         _queue = new shared PriorityQueue;
         _eventMutex = new Mutex;
         t_current = this;
+    }
+
+   /**
+    * Whether shutdown has been asked for.  Set as soon as shutdown() is
+    * called, from whichever thread called it.
+    */
+    @property bool hasShutdownStarted() shared const
+    {
+        return atomicLoad(_shutdownStarted);
+    }
+
+   /**
+    * Whether the shutdown has run its course: the pump has unwound, the
+    * queue is closed and its operations released.  A dispatcher shut down
+    * without ever having been pumped never reaches this -- there is no
+    * dispatcher thread to finish on -- though its queue is still released.
+    */
+    @property bool hasShutdownFinished() shared const
+    {
+        return atomicLoad(_shutdownFinished);
+    }
+
+   /**
+    * Raised on the dispatcher thread once the pump has unwound, before the
+    * queue is closed.  A handler runs inline and should wind up its
+    * business there and then: work posted from it is aborted along with
+    * whatever else was still queued.
+    */
+    @event @property auto onShutdownStarted() shared
+    {
+        auto self = cast(Dispatcher) this;
+
+        return EventAccessor!DispatcherShutdownHandler(
+            (DispatcherShutdownHandler h)
+            {
+                synchronized (self._eventMutex)
+                    self._onShutdownStarted.add(h);
+            },
+            (DispatcherShutdownHandler h)
+            {
+                synchronized (self._eventMutex)
+                    self._onShutdownStarted.remove(h);
+            });
+    }
+
+   /**
+    * Raised on the dispatcher thread after the queue has been closed and
+    * everything left in it released.  Posting is no longer possible by
+    * then; this is for releasing what the thread still holds.
+    */
+    @event @property auto onShutdownFinished() shared
+    {
+        auto self = cast(Dispatcher) this;
+
+        return EventAccessor!DispatcherShutdownHandler(
+            (DispatcherShutdownHandler h)
+            {
+                synchronized (self._eventMutex)
+                    self._onShutdownFinished.add(h);
+            },
+            (DispatcherShutdownHandler h)
+            {
+                synchronized (self._eventMutex)
+                    self._onShutdownFinished.remove(h);
+            });
     }
 
    /**
@@ -251,20 +321,27 @@ final class Dispatcher : DispatcherObject
     do {
         verifyAccess();
 
-        if (atomicLoad(_shutdownRequested))
+        if (atomicLoad(_shutdownStarted))
             throw new Exception("The dispatcher has been shut down.");
 
         frame.enter(cast(shared) this);
-        _frameDepth++;
+        atomicOp!"+="(_frameDepth, 1);
 
         scope (exit)
         {
-            _frameDepth--;
+            atomicOp!"-="(_frameDepth, 1);
             frame.leave();
 
-            // The request is spent once the outermost frame has unwound.
-            if (_frameDepth == 0)
+            if (atomicLoad(_frameDepth) == 0)
+            {
+                // The request is spent once the outermost frame has unwound.
                 atomicStore(_exitAllFramesRequested, false);
+
+                // The outermost pump owns the rest of the shutdown, whether
+                // it was entered through run() or pushFrame() directly.
+                if (atomicLoad(_shutdownStarted))
+                    finishShutdown();
+            }
         }
 
         // The queue is drained before the condition is read: the handler
@@ -294,22 +371,12 @@ final class Dispatcher : DispatcherObject
     {
         verifyAccess();
 
-        // Nothing to pump if the dispatcher is already down; the cleanup
-        // below still has to happen.
-        if (!atomicLoad(_shutdownRequested))
+        // Nothing to pump if the dispatcher is already down, but the
+        // shutdown still has to be seen through.
+        if (!atomicLoad(_shutdownStarted))
             pushFrame(new DispatcherFrame);
 
-        // Nobody will ever run this work now; releasing it wakes any thread
-		// blocked in wait() instead of leaving it stuck forever.  Harmless when
-		// shutdown() already did it: close() is idempotent.
-		foreach (op; _queue.close())
-			op.setAborted();
-
-        // Nothing will tick once the pump is gone.
-        _timers = null;
-
-        if (t_current is this)
-            t_current = null;
+        finishShutdown();
     }
 
    /**
@@ -318,16 +385,20 @@ final class Dispatcher : DispatcherObject
     */
     void shutdown() shared
     {
-        atomicStore(_shutdownRequested, true);
+        atomicStore(_shutdownStarted, true);
+        _loop.quit();
 
-        // Release whatever is still queued right here rather than only on
-        // the way out of run(): shutting down a dispatcher that was never
-        // pumped would otherwise leave its operations pending forever, and
-        // anyone blocked in wait() along with them.
+        // A running pump owns the rest, and does it on its own thread so
+        // that the handlers of the shutdown events run where they expect to.
+        if (atomicLoad(_frameDepth) > 0)
+            return;
+
+        // Nothing is pumping and perhaps nothing ever will, so the queue has
+        // to be released here: leaving it would strand its operations, and
+        // any thread blocked in wait() along with them.  The events are not
+        // raised -- there is no dispatcher thread running to raise them on.
         foreach (op; _queue.close())
             op.setAborted();
-
-        _loop.quit();
 
         if (Thread.getThis().id == _threadId && (cast(shared) t_current) is this)
             t_current = null;
@@ -414,6 +485,53 @@ private:
     }
 
    /*
+    * The closing half of a shutdown, always on the dispatcher thread.  Runs
+    * once: whichever of run() or the outermost pushFrame() gets here first
+    * does the work.
+    */
+    void finishShutdown()
+    {
+        if (!atomicLoad(_shutdownStarted) || atomicLoad(_shutdownFinished))
+            return;
+
+        // Raised while the queue is still open, so a handler can still post
+        // the work it needs to wind up.
+        raiseShutdown(_onShutdownStarted);
+
+        // Nobody will ever run what is left; releasing it wakes any thread
+        // blocked in wait() instead of leaving it stuck forever.
+        foreach (op; _queue.close())
+            op.setAborted();
+
+        // Nothing will tick once the pump is gone.
+        _timers = null;
+
+        atomicStore(_shutdownFinished, true);
+        raiseShutdown(_onShutdownFinished);
+
+        if (t_current is this)
+            t_current = null;
+    }
+
+   /*
+    * Snapshot under the lock, deliver outside it.  A handler that throws is
+    * swallowed: one of them failing must not leave the shutdown half done.
+    */
+    void raiseShutdown(ref Multicast!DispatcherShutdownHandler event)
+    {
+        Multicast!DispatcherShutdownHandler handlers;
+
+        synchronized (_eventMutex)
+            handlers = event.dup;
+
+        try
+            handlers(cast(shared) this);
+        catch (Exception)
+        {
+        }
+    }
+
+   /*
     * Whether the frame currently being pumped should stay in its loop.
     */
     bool keepPumping(DispatcherFrame frame)
@@ -421,7 +539,7 @@ private:
 		if (!frame.resume)
 			return false;
 
-		if (atomicLoad(_shutdownRequested))
+		if (atomicLoad(_shutdownStarted))
 			return false;
 
 		return !(frame.exitsOnRequest && atomicLoad(_exitAllFramesRequested));
@@ -434,7 +552,7 @@ private:
 
     void processQueue()
 	{
-		while (!atomicLoad(_shutdownRequested))
+		while (!atomicLoad(_shutdownStarted))
 		{
 			postDueTicks();
 
@@ -473,7 +591,7 @@ private:
 			op.invoke();
 		}
 
-		if (!atomicLoad(_shutdownRequested))
+		if (!atomicLoad(_shutdownStarted))
 			scheduleNextWake();
 	}
 
@@ -530,11 +648,14 @@ private:
     EventLoop         _loop;
     MonoTime          _backgroundDeadline;
     DispatcherTimer[] _timers;
-    shared bool       _shutdownRequested;
-    int               _frameDepth;
+    shared bool       _shutdownStarted;
+    shared bool       _shutdownFinished;
+    shared int        _frameDepth;
     shared bool       _exitAllFramesRequested;
     Mutex             _eventMutex;
     Multicast!DispatcherUnhandledExceptionHandler _onUnhandledException;
+    Multicast!DispatcherShutdownHandler           _onShutdownStarted;
+    Multicast!DispatcherShutdownHandler           _onShutdownFinished;
 
 package:
     shared(PriorityQueue) _queue;
@@ -1017,5 +1138,112 @@ unittest // an out-of-range priority is rejected in every build, not only in deb
 
         assert(threw, "changing an operation's priority is validated too");
         assert(op.priority == DispatcherPriority.normal, "...and leaves it untouched");
+    });
+}
+
+// ===========================================================================
+// Dispatcher: shutdown lifecycle
+// ===========================================================================
+
+unittest // the events bracket the closing of the queue, on the owning thread
+{
+    withDispatcher((d, loop) {
+        auto owner = Thread.getThis();
+
+        string[] order;
+        bool startedOnOwner, finishedOnOwner;
+        bool finishedFlagAtStart, finishedFlagAtEnd;
+
+        assert(!d.hasShutdownStarted);
+        assert(!d.hasShutdownFinished);
+
+        d.onShutdownStarted ~= (shared(Dispatcher) sender) {
+            order ~= "started";
+            startedOnOwner = Thread.getThis() is owner;
+            finishedFlagAtStart = sender.hasShutdownFinished;
+        };
+
+        d.onShutdownFinished ~= (shared(Dispatcher) sender) {
+            order ~= "finished";
+            finishedOnOwner = Thread.getThis() is owner;
+            finishedFlagAtEnd = sender.hasShutdownFinished;
+        };
+
+        d.invokeAsync({ d.shutdown(); });
+        pump(d);
+
+        assert(order == ["started", "finished"]);
+        assert(startedOnOwner && finishedOnOwner, "handlers belong to the dispatcher thread");
+        assert(!finishedFlagAtStart, "the first event comes before the queue is closed");
+        assert(finishedFlagAtEnd, "...and the second after");
+        assert(d.hasShutdownStarted && d.hasShutdownFinished);
+    });
+}
+
+unittest // a shutdown asked for from another thread still finishes on the owner
+{
+    withDispatcher((d, loop) {
+        auto owner = Thread.getThis();
+
+        shared bool startedOnOwner;
+        shared bool finishedOnOwner;
+
+        d.onShutdownStarted ~= (shared(Dispatcher) sender) {
+            atomicStore(startedOnOwner, Thread.getThis() is owner);
+        };
+
+        d.onShutdownFinished ~= (shared(Dispatcher) sender) {
+            atomicStore(finishedOnOwner, Thread.getThis() is owner);
+        };
+
+        auto worker = new Thread({
+            Thread.sleep(20.msecs);
+            d.shutdown();
+        }).start();
+
+        pump(d);
+        worker.join();
+
+        assert(atomicLoad(startedOnOwner),
+               "the handlers must not run on the thread that asked for the shutdown");
+        assert(atomicLoad(finishedOnOwner));
+    });
+}
+
+unittest // shutting down a dispatcher that never pumped still releases its work
+{
+    auto loop = new ManualEventLoop;
+    auto d = cast(shared) new Dispatcher(loop);
+
+    bool everRaised;
+    d.onShutdownFinished ~= (shared(Dispatcher) sender) { everRaised = true; };
+
+    auto op = d.invokeAsync({ });
+    d.shutdown();
+
+    assert(d.hasShutdownStarted);
+    assert(op.status == OperationStatus.aborted,
+           "queued work is released even with nothing pumping");
+    assert(!d.hasShutdownFinished,
+           "there is no dispatcher thread to finish the shutdown on");
+    assert(!everRaised, "...so the events stay silent rather than run on a foreign thread");
+}
+
+unittest // a handler that throws must not leave the shutdown half done
+{
+    withDispatcher((d, loop) {
+        bool finished;
+
+        d.onShutdownStarted ~= (shared(Dispatcher) sender) {
+            throw new Exception("the handler is broken");
+        };
+
+        d.onShutdownFinished ~= (shared(Dispatcher) sender) { finished = true; };
+
+        d.invokeAsync({ d.shutdown(); });
+        pump(d);
+
+        assert(finished, "the shutdown runs to completion regardless");
+        assert(d.hasShutdownFinished);
     });
 }
