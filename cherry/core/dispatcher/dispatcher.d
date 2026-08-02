@@ -9,6 +9,7 @@ import cherry.core.multicast;
 import cherry.platform;
 import cherry.core.dispatcher.operation;
 import cherry.core.dispatcher.queue;
+import cherry.core.dispatcher.timer;
 import cherry.core.dispatcher.types;
 
 /**
@@ -249,6 +250,9 @@ final class Dispatcher : DispatcherObject
 		foreach (op; _queue.close())
 			op.setAborted();
 
+        // Nothing will tick once the pump is gone.
+        _timers = null;
+
         if (t_current is this)
             t_current = null;
     }
@@ -275,6 +279,32 @@ final class Dispatcher : DispatcherObject
     }
 
 package:
+   /*
+    * Timer registration.  Both run on the dispatcher thread -- start() and
+    * stop() verify that -- so the list needs no lock of its own.
+    */
+    void addTimer(DispatcherTimer timer)
+    {
+        foreach (registered; _timers)
+            if (registered is timer)
+                return;
+
+        _timers ~= timer;
+    }
+
+    /// ditto
+    void removeTimer(DispatcherTimer timer)
+    {
+        foreach (i, registered; _timers)
+        {
+            if (registered is timer)
+            {
+                _timers = _timers[0 .. i] ~ _timers[i + 1 .. $];
+                return;
+            }
+        }
+    }
+
    /*
     * Reports a failure that nothing else will observe.  Called by the
     * operation itself, on the dispatcher thread.
@@ -329,11 +359,13 @@ private:
 	{
 		while (!atomicLoad(_shutdownRequested))
 		{
+			postDueTicks();
+
 			DispatcherPriority p;
 			if ((p = _queue.highestPriority) <= DispatcherPriority.inactive) 
 			{ 
 				_backgroundDeadline = MonoTime.zero; 
-				return; 
+				break; 
 			}
 
 			bool deadlineSet = _backgroundDeadline != MonoTime.zero;
@@ -347,10 +379,7 @@ private:
 				if (!deadlineSet) 
 					_backgroundDeadline = MonoTime.currTime + BACKGROUND_PROMOTION_DELAY;
 
-				// Wake when the deadline is actually due rather than a full delay
-				// later: it may have been armed several wakes ago.
-				_loop.requestWakeAfter(_backgroundDeadline - MonoTime.currTime);
-				return;
+				break;
 			}
 
 			auto op = _queue.dequeue();
@@ -366,6 +395,54 @@ private:
 
 			op.invoke();
 		}
+
+		if (!atomicLoad(_shutdownRequested))
+			scheduleNextWake();
+	}
+
+   /*
+    * Posts a tick for every timer that has come due and opens its next
+    * period.  The list is copied first: a tick handler is free to start or
+    * stop timers.
+    */
+    void postDueTicks()
+	{
+		if (_timers.length == 0)
+			return;
+
+		immutable now = MonoTime.currTime;
+
+		foreach (timer; _timers.dup)
+		{
+			if (timer.dueAt > now)
+				continue;
+
+			timer.openNextPeriod(now);
+			(cast(shared) this).post(&timer.raiseTick, timer.priority, false);
+		}
+	}
+
+   /*
+    * The loop offers a single deferred wake, so everything that wants one
+    * -- the starvation guard and every running timer -- is multiplexed onto
+    * the earliest deadline among them.
+    */
+    void scheduleNextWake()
+	{
+		MonoTime earliest;   // MonoTime.zero means nothing is waiting
+
+		if (_backgroundDeadline != MonoTime.zero)
+			earliest = _backgroundDeadline;
+
+		foreach (timer; _timers)
+			if (earliest == MonoTime.zero || timer.dueAt < earliest)
+				earliest = timer.dueAt;
+
+		if (earliest == MonoTime.zero)
+			return;
+
+		immutable now = MonoTime.currTime;
+		_loop.requestWakeAfter(earliest > now ? earliest - now : Duration.zero);
 	}
 
     enum Duration BACKGROUND_PROMOTION_DELAY = dur!"msecs"(50);
@@ -375,6 +452,7 @@ private:
     immutable uint    _threadId;
     EventLoop         _loop;
     MonoTime          _backgroundDeadline;
+    DispatcherTimer[] _timers;
     shared bool       _shutdownRequested;
     Mutex             _eventMutex;
     Multicast!DispatcherUnhandledExceptionHandler _onUnhandledException;

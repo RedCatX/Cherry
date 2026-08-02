@@ -10,4 +10,5 @@ module cherry.core.dispatcher;
 
 public import cherry.core.dispatcher.dispatcher;
 public import cherry.core.dispatcher.operation;
+public import cherry.core.dispatcher.timer;
 public import cherry.core.dispatcher.types;
