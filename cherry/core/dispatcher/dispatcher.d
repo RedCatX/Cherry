@@ -7,6 +7,7 @@ import core.time : Duration, MonoTime, dur;
 
 import cherry.core.multicast;
 import cherry.platform;
+import cherry.core.dispatcher.frame;
 import cherry.core.dispatcher.operation;
 import cherry.core.dispatcher.queue;
 import cherry.core.dispatcher.timer;
@@ -235,6 +236,57 @@ final class Dispatcher : DispatcherObject
     }
 
    /**
+    * Runs a nested loop until the frame is told to stop.
+    *
+    * Everything the dispatcher would normally do carries on while the frame
+    * runs -- this is a second pump, not a pause -- so the caller blocks
+    * without the application going dead.  The frame ends when its resume
+    * property is cleared, when the dispatcher shuts down, or, unless it
+    * opted out, when exitAllFrames() is called.
+    */
+    void pushFrame(DispatcherFrame frame)
+    in {
+        assert(frame !is null);
+    }
+    do {
+        verifyAccess();
+
+        if (atomicLoad(_shutdownRequested))
+            throw new Exception("The dispatcher has been shut down.");
+
+        frame.enter(cast(shared) this);
+        _frameDepth++;
+
+        scope (exit)
+        {
+            _frameDepth--;
+            frame.leave();
+
+            // The request is spent once the outermost frame has unwound.
+            if (_frameDepth == 0)
+                atomicStore(_exitAllFramesRequested, false);
+        }
+
+        // The queue is drained before the condition is read: the handler
+        // that ends the frame runs inside processQueue.
+        _loop.run({
+            processQueue();
+            return keepPumping(frame);
+        });
+    }
+
+   /**
+    * Asks every frame that opted in to return, innermost first.  The
+    * dispatcher itself keeps running: this ends the nested loops, not the
+    * pump.
+    */
+    void exitAllFrames() shared
+    {
+        atomicStore(_exitAllFramesRequested, true);
+        _loop.requestWake();
+    }
+
+   /**
     * Pumps the event loop on the dispatcher thread until shutdown is
     * called.  Queued work is drained in FIFO order on every wake-up.
     */
@@ -242,7 +294,10 @@ final class Dispatcher : DispatcherObject
     {
         verifyAccess();
 
-        _loop.run(&processQueue);
+        // Nothing to pump if the dispatcher is already down; the cleanup
+        // below still has to happen.
+        if (!atomicLoad(_shutdownRequested))
+            pushFrame(new DispatcherFrame);
 
         // Nobody will ever run this work now; releasing it wakes any thread
 		// blocked in wait() instead of leaving it stuck forever.  Harmless when
@@ -279,6 +334,14 @@ final class Dispatcher : DispatcherObject
     }
 
 package:
+   /*
+    * Nudges the loop so it re-reads whatever condition just changed.
+    */
+    void wake() shared
+    {
+        _loop.requestWake();
+    }
+
    /*
     * Timer registration.  Both run on the dispatcher thread -- start() and
     * stop() verify that -- so the list needs no lock of its own.
@@ -349,6 +412,20 @@ private:
         _loop.requestWake();
         return op;
     }
+
+   /*
+    * Whether the frame currently being pumped should stay in its loop.
+    */
+    bool keepPumping(DispatcherFrame frame)
+	{
+		if (!frame.resume)
+			return false;
+
+		if (atomicLoad(_shutdownRequested))
+			return false;
+
+		return !(frame.exitsOnRequest && atomicLoad(_exitAllFramesRequested));
+	}
 
     bool isForeground(DispatcherPriority p)
 	{
@@ -454,6 +531,8 @@ private:
     MonoTime          _backgroundDeadline;
     DispatcherTimer[] _timers;
     shared bool       _shutdownRequested;
+    int               _frameDepth;
+    shared bool       _exitAllFramesRequested;
     Mutex             _eventMutex;
     Multicast!DispatcherUnhandledExceptionHandler _onUnhandledException;
 

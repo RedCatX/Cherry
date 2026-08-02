@@ -16,19 +16,26 @@ import core.time : Duration, MonoTime;
 interface EventLoop
 {
    /**
-    * Runs the loop on the current thread until quit is called.
+    * Runs the loop on the current thread until quit is called or onWake
+    * returns false.
     *
     * onWake is invoked on this thread once on entry (draining work queued
-    * before the loop started) and then after every wake request.
+    * before the loop started) and then after every wake request; returning
+    * false from it leaves this loop.  That is how a nested loop ends while
+    * the loop it was started from carries on -- run may be called again
+    * from inside onWake, and implementations must tolerate it.
+    *
+    * quit, by contrast, is sticky: it ends every loop, nested ones first,
+    * so a shutdown is not swallowed by whichever loop happens to notice it.
     *
     * Deliberately not shared: only the owning thread may pump the loop, and
     * the unshared reference is what expresses that.
     */
-    void run(scope void delegate() onWake);
+    void run(scope bool delegate() onWake);
 
    /**
-    * Makes run return.  A wake request already pending at that moment is
-    * still delivered first.
+    * Makes run return -- every run, if loops are nested.  A wake request
+    * already pending at that moment is still delivered first.
     *
     * Shared: callable from any thread.  Other threads hold a shared view of
     * the loop, through which quit and requestWake are the only operations
@@ -77,9 +84,10 @@ final class ManualEventLoop : EventLoop
         _condition = new Condition(_mutex);
     }
 
-    void run(scope void delegate() onWake)
+    void run(scope bool delegate() onWake)
     {
-        onWake();
+        if (!onWake())
+            return;
 
         while (true)
         {
@@ -102,11 +110,10 @@ final class ManualEventLoop : EventLoop
                         break;
                     }
 
+                    // Sticky, so that a nested loop noticing the quit does
+                    // not consume it: the loops outside have to see it too.
                     if (_quitRequested)
-                    {
-                        _quitRequested = false;
                         return;
-                    }
 
                     if (_hasDeadline)
                         _condition.wait(_deadline - MonoTime.currTime);
@@ -115,7 +122,8 @@ final class ManualEventLoop : EventLoop
                 }
             }
 
-            onWake();
+            if (!onWake())
+                return;
         }
     }
 
@@ -194,7 +202,7 @@ unittest
     });
 
     worker.start();
-    loop.run({ wakes++; });
+    loop.run({ wakes++; return true; });
     worker.join();
 
     // One initial drain plus one to three wake deliveries: consecutive
@@ -228,6 +236,8 @@ unittest
             secondWakeAt = MonoTime.currTime;
             (cast(shared) loop).quit();
         }
+
+        return true;
     });
 
     assert(wakes == 2);

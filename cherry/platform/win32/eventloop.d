@@ -46,30 +46,40 @@ final class Win32EventLoop : EventLoop
             throw new Exception("Failed to create the event-loop message window.");
     }
 
-    void run(scope void delegate() onWake)
+    void run(scope bool delegate() onWake)
     {
         assert(GetCurrentThreadId() == _threadId,
                "The event loop must run on the thread that created it.");
 
-        onWake();
+        if (!onWake())
+            return;
 
         MSG msg;
         while (GetMessageW(&msg, null, 0, 0) > 0)
         {
             if (msg.hwnd is _hwnd && msg.message == WM_CHERRY_WAKE)
             {
-                onWake();
+                if (!onWake())
+                    return;
                 continue;
             }
 
             if (msg.hwnd is _hwnd && msg.message == WM_CHERRY_QUIT)
+            {
+                // Hand it on before leaving: a nested loop must not
+                // consume the news before the loops outside have seen it.
+                // Posting keeps quit behind the wakes already queued, so
+                // they are still delivered first.
+                PostMessageW(_hwnd, WM_CHERRY_QUIT, 0, 0);
                 break;
+            }
 
             if (msg.hwnd is _hwnd && msg.message == WM_TIMER
                 && msg.wParam == CHERRY_TIMER_ID)
             {
                 KillTimer(_hwnd, CHERRY_TIMER_ID);   // one-shot
-                onWake();
+                if (!onWake())
+                    return;
                 continue;
             }
 
@@ -81,7 +91,8 @@ final class Win32EventLoop : EventLoop
     void quit() shared
     {
         // PostMessage is thread-safe by the Win32 contract, so the handle
-        // needs no further synchronization.
+        // needs no further synchronization.  The loop that receives this
+        // re-posts it, so nested loops all unwind.
         PostMessageW(cast(HWND) _hwnd, WM_CHERRY_QUIT, 0, 0);
     }
 
@@ -153,7 +164,7 @@ unittest
     });
 
     worker.start();
-    loop.run({ wakes++; });
+    loop.run({ wakes++; return true; });
     worker.join();
 
     // Posted messages do not coalesce: one initial drain + exactly three.
