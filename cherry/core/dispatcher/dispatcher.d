@@ -80,9 +80,15 @@ private:
 /**
  * A delegate type for reporting an exception that escaped a dispatcher
  * operation and that nothing else is going to observe.
+ *
+ * Setting handled says the failure has been dealt with.  The dispatcher
+ * itself carries on either way -- one broken handler must not take the pump
+ * down with it -- so the flag is there for the handlers to coordinate: an
+ * application can report what nobody else claimed, and stay quiet about
+ * what somebody did.
  */
 alias DispatcherUnhandledExceptionHandler =
-    void delegate(shared(DispatcherOperation) op, Exception exception);
+    void delegate(shared(DispatcherOperation) op, Exception exception, ref bool handled);
 
 /**
  * A delegate type for handling the two ends of a dispatcher shutdown.
@@ -452,8 +458,12 @@ package:
         synchronized (self._eventMutex)
             handlers = self._onUnhandledException.dup;
 
+        // Passed to every handler in turn, so a later one can see that an
+        // earlier one already dealt with the failure.
+        bool handled;
+
         try
-            handlers(op, exception);
+            handlers(op, exception, handled);
         catch (Exception)
         {
             // A reporting handler that fails must not take down the pump,
@@ -1007,7 +1017,7 @@ unittest // a failure nobody awaits reaches the hook
         shared(DispatcherOperation) reported;
         Exception seen;
 
-        d.onUnhandledException ~= (shared(DispatcherOperation) op, Exception e) {
+        d.onUnhandledException ~= (shared(DispatcherOperation) op, Exception e, ref bool handled) {
             reported = op;
             seen = e;
         };
@@ -1028,7 +1038,7 @@ unittest // an awaited failure is rethrown instead of reported
         shared bool hookFired;
         shared bool rethrown;
 
-        d.onUnhandledException ~= (shared(DispatcherOperation) op, Exception e) {
+        d.onUnhandledException ~= (shared(DispatcherOperation) op, Exception e, ref bool handled) {
             atomicStore(hookFired, true);
         };
 
@@ -1054,7 +1064,7 @@ unittest // a reporting handler that throws must not stop the pump
     withDispatcher((d, loop) {
         bool laterRan;
 
-        d.onUnhandledException ~= (shared(DispatcherOperation) op, Exception e) {
+        d.onUnhandledException ~= (shared(DispatcherOperation) op, Exception e, ref bool handled) {
             throw new Exception("the handler is broken too");
         };
 
@@ -1071,7 +1081,7 @@ unittest // a removed handler stops receiving reports
     withDispatcher((d, loop) {
         int reports;
 
-        void onFailure(shared(DispatcherOperation) op, Exception e)
+        void onFailure(shared(DispatcherOperation) op, Exception e, ref bool handled)
         {
             reports++;
         }
@@ -1245,5 +1255,29 @@ unittest // a handler that throws must not leave the shutdown half done
 
         assert(finished, "the shutdown runs to completion regardless");
         assert(d.hasShutdownFinished);
+    });
+}
+
+unittest // handlers coordinate through the handled flag
+{
+    withDispatcher((d, loop) {
+        bool sawHandledFromEarlier;
+
+        d.onUnhandledException ~= (shared(DispatcherOperation) op, Exception e, ref bool handled) {
+            handled = true;
+        };
+
+        d.onUnhandledException ~= (shared(DispatcherOperation) op, Exception e, ref bool handled) {
+            sawHandledFromEarlier = handled;
+        };
+
+        bool laterRan;
+        d.invokeAsync({ throw new Exception("boom"); });
+        d.invokeAsync({ laterRan = true; });
+        pumpUntilIdle(d);
+
+        assert(sawHandledFromEarlier,
+               "a handler sees that an earlier one claimed the failure");
+        assert(laterRan, "the pump carries on whether or not anyone claimed it");
     });
 }
