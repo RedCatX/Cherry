@@ -10,6 +10,16 @@ import cherry.ui.event;
 import cherry.ui.input;
 
 /**
+ * A delegate type for handling a window that is about to close.
+ *
+ * The decision travels as a ref parameter rather than a return value: a
+ * Multicast hands back only the last handler's result, so a returned bool
+ * would quietly discard every subscriber but one.  With a ref, any of them
+ * can object, and each sees whether an earlier one already did.
+ */
+alias WindowClosingHandler = void delegate(Window window, ref bool cancel);
+
+/**
  * A top-level window: the root of an element tree bound to a native window
  * surface.
  *
@@ -86,7 +96,23 @@ class Window : Element
     */
     void show()
     {
+        verifyAlive();
         _platform.show();
+    }
+
+   /**
+    * Takes the window off the screen without destroying it.
+    *
+    * This is the reversible counterpart of close(): the native window, its
+    * renderer and its place in the application's window list all survive, so
+    * show() brings it back where it was.  An application that wants its
+    * close button to tuck the window away rather than end it cancels
+    * onClosing and calls this.
+    */
+    void hide()
+    {
+        verifyAlive();
+        _platform.hide();
     }
 
    /**
@@ -98,14 +124,50 @@ class Window : Element
     }
 
    /**
-    * Destroys the native window; onClosed is raised afterwards.
+    * Asks the window to close, raising onClosing first: a handler that sets
+    * cancel keeps the window alive, exactly as it does when the request came
+    * from the window's own close button.
+    *
+    * Closing destroys the native window -- it is not the reverse of show().
+    * Closing an already closed window does nothing.
     */
     void close()
     {
-        _platform.close();
+        if (_destroyed)
+            return;
+
+        bool cancel;
+        _onClosing(this, cancel);
+
+        if (!cancel)
+            forceClose();
+    }
+
+   /**
+    * Raised when the window is about to close, whether the request came from
+    * the user or from close().  Setting cancel keeps the window open; pair
+    * that with hide() to make the close button put the window away instead.
+    *
+    * Shutting the application down does not raise this: by then the decision
+    * has been made elsewhere, and a window is not entitled to veto it.
+    */
+    @event @property auto onClosing()
+    {
+        return eventAccessor(&_onClosing);
     }
 
 package(cherry):
+   /**
+    * Destroys the window without asking, for the application shutting down.
+    */
+    void forceClose()
+    {
+        if (_destroyed)
+            return;
+
+        _platform.close();
+    }
+
    /**
     * Called when the application gains or loses the foreground.
     *
@@ -198,9 +260,23 @@ private:
 
     void handleDestroyed()
     {
+        _destroyed = true;
         handleDisposedRenderer();
 
         _onClosed(this);
+    }
+
+   /*
+    * Using a window whose native surface is gone would work on a stale
+    * handle and quietly do nothing, so say so instead -- and point at the
+    * call that was probably meant.
+    */
+    void verifyAlive() const
+    {
+        if (_destroyed)
+            throw new Exception(
+                "The window has been closed and cannot be shown again. "
+                ~ "To take a window off the screen and bring it back, use hide().");
     }
 
     void handlePaintRequested()
@@ -247,7 +323,8 @@ private:
     static void titleChanged(const(Object) obj, const(Value) oldValue, const(Value) newValue)
     {
         auto window = cast(Window) cast() obj;
-        if (window is null || window._syncingFromPlatform || window._platform is null)
+        if (window is null || window._syncingFromPlatform
+            || window._platform is null || window._destroyed)
             return;
 
         window._platform.setTitle(newValue.get!string);
@@ -256,7 +333,8 @@ private:
     static void sizeChanged(const(Object) obj, const(Value) oldValue, const(Value) newValue)
     {
         auto window = cast(Window) cast() obj;
-        if (window is null || window._syncingFromPlatform || window._platform is null)
+        if (window is null || window._syncingFromPlatform
+            || window._platform is null || window._destroyed)
             return;
 
         window._platform.setClientSize(window.getValue(widthProperty).get!int,
@@ -266,7 +344,9 @@ private:
     PlatformWindow _platform;
     WindowRenderer _renderer;
     Multicast!(void delegate(Window)) _onClosed;
+    Multicast!WindowClosingHandler _onClosing;
     bool _syncingFromPlatform;
+    bool _destroyed;
 }
 
 version (unittest)
@@ -440,4 +520,112 @@ unittest
     assert(!platform.host.onSessionEnding(SessionEndReason.shutdown),
            "the application's refusal reaches the platform");
     assert(seen == SessionEndReason.shutdown);
+}
+
+unittest // a handler can refuse the close, whoever asked for it
+{
+    TestPlatformWindow platform;
+    auto window = new Window((PlatformWindowHost host) {
+        platform = new TestPlatformWindow(host);
+        return cast(PlatformWindow) platform;
+    });
+
+    bool refuse = true;
+    int asked;
+    bool closed;
+
+    window.onClosing ~= (Window w, ref bool cancel) { asked++; cancel = refuse; };
+    window.onClosed ~= (Window w) { closed = true; };
+
+    // The window's own close button takes the same route as close() does.
+    platform.host.onCloseRequested();
+    assert(asked == 1);
+    assert(!platform.destroyed && !closed, "a refused close leaves the window alone");
+
+    window.close();
+    assert(asked == 2, "asking programmatically is asked all the same");
+    assert(!platform.destroyed);
+
+    refuse = false;
+    window.close();
+    assert(platform.destroyed && closed, "and it goes when nobody objects");
+}
+
+unittest // refusing and hiding is how a close button tucks a window away
+{
+    TestPlatformWindow platform;
+    auto window = new Window((PlatformWindowHost host) {
+        platform = new TestPlatformWindow(host);
+        return cast(PlatformWindow) platform;
+    });
+
+    window.onClosing ~= (Window w, ref bool cancel) { cancel = true; w.hide(); };
+
+    window.show();
+    assert(platform.visible);
+
+    platform.host.onCloseRequested();
+    assert(!platform.visible, "the window went away...");
+    assert(!platform.destroyed, "...without being destroyed");
+
+    window.show();
+    assert(platform.visible, "and it comes back, the same window as before");
+}
+
+unittest // any one handler is enough to refuse, and the later ones can tell
+{
+    TestPlatformWindow platform;
+    auto window = new Window((PlatformWindowHost host) {
+        platform = new TestPlatformWindow(host);
+        return cast(PlatformWindow) platform;
+    });
+
+    bool lastSawTheRefusal;
+
+    window.onClosing ~= (Window w, ref bool cancel) { };
+    window.onClosing ~= (Window w, ref bool cancel) { cancel = true; };
+    window.onClosing ~= (Window w, ref bool cancel) { lastSawTheRefusal = cancel; };
+
+    window.close();
+
+    assert(lastSawTheRefusal, "a handler sees that an earlier one objected");
+    assert(!platform.destroyed);
+}
+
+unittest // shutting down goes past the refusal
+{
+    TestPlatformWindow platform;
+    auto window = new Window((PlatformWindowHost host) {
+        platform = new TestPlatformWindow(host);
+        return cast(PlatformWindow) platform;
+    });
+
+    bool asked;
+    window.onClosing ~= (Window w, ref bool cancel) { asked = true; cancel = true; };
+
+    window.forceClose();
+
+    assert(!asked, "a window does not get to veto the application shutting down");
+    assert(platform.destroyed);
+}
+
+unittest // a closed window says so instead of working on a stale handle
+{
+    import std.exception : assertThrown;
+
+    TestPlatformWindow platform;
+    auto window = new Window((PlatformWindowHost host) {
+        platform = new TestPlatformWindow(host);
+        return cast(PlatformWindow) platform;
+    });
+
+    window.close();
+    assert(platform.destroyed);
+
+    assertThrown(window.show(), "showing a closed window must not silently do nothing");
+    assertThrown(window.hide());
+
+    // Closing what is already closed is simply nothing to do.
+    window.close();
+    window.forceClose();
 }
