@@ -351,50 +351,7 @@ private:
 
 version (unittest)
 {
-   /*
-    * A fake platform window: records every push from the framework and lets
-    * tests inject host notifications as if they came from the OS.
-    */
-    private final class TestPlatformWindow : PlatformWindow
-    {
-        PlatformWindowHost host;
-        string title;
-        int width;
-        int height;
-        bool visible;
-        bool destroyed;
-        int sizePushes;
-        int invalidations;
-
-        this(PlatformWindowHost host)
-        {
-            this.host = host;
-        }
-
-        void show() { visible = true; }
-        void hide() { visible = false; }
-
-        void close()
-        {
-            destroyed = true;
-            host.onDestroyed();   // mirrors WM_DESTROY
-        }
-
-        void setTitle(string value) { title = value; }
-
-        void invalidate() { invalidations++; }
-
-        void setClientSize(int w, int h)
-        {
-            width = w;
-            height = h;
-            sizePushes++;
-        }
-
-        @property int clientWidth() { return width; }
-        @property int clientHeight() { return height; }
-        @property void* nativeHandle() { return null; }
-    }
+    import cherry.ui.testing : TestPlatformWindow;
 }
 
 unittest

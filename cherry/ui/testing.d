@@ -1,0 +1,106 @@
+module cherry.ui.testing;
+
+/**
+ * Helpers shared by the unit tests of the modules in this package.  The whole
+ * module is behind version(unittest), so importing it from production code
+ * costs nothing.
+ */
+
+version (unittest):
+
+import cherry.core.dispatcher;
+import cherry.platform;
+import cherry.ui.application;
+import cherry.ui.window;
+
+/**
+ * A fake platform window: records every push from the framework and lets a
+ * test inject host notifications as if they had come from the OS.
+ */
+final class TestPlatformWindow : PlatformWindow
+{
+    PlatformWindowHost host;
+    string title;
+    int width;
+    int height;
+    bool visible;
+    bool destroyed;
+    int sizePushes;
+    int invalidations;
+
+    this(PlatformWindowHost host)
+    {
+        this.host = host;
+    }
+
+    void show() { visible = true; }
+    void hide() { visible = false; }
+
+    void close()
+    {
+        destroyed = true;
+        host.onDestroyed();   // mirrors WM_DESTROY
+    }
+
+    void setTitle(string value) { title = value; }
+
+    void invalidate() { invalidations++; }
+
+    void setClientSize(int w, int h)
+    {
+        width = w;
+        height = h;
+        sizePushes++;
+    }
+
+    @property int clientWidth() { return width; }
+    @property int clientHeight() { return height; }
+    @property void* nativeHandle() { return null; }
+}
+
+/**
+ * A window and the fake platform underneath it.  Subscripting through to the
+ * window means a test can treat it as one: `w.show()` drives the window,
+ * `w.platform.visible` checks what the platform was told.
+ */
+struct TestWindow
+{
+    Window window;
+    TestPlatformWindow platform;
+
+    alias window this;
+}
+
+/**
+ * Builds a window on a fake platform.
+ */
+TestWindow makeWindow()
+{
+    TestPlatformWindow fake;
+
+    auto window = new Window((PlatformWindowHost host) {
+        fake = new TestPlatformWindow(host);
+        return cast(PlatformWindow) fake;
+    });
+
+    return TestWindow(window, fake);
+}
+
+/**
+ * Runs body with an application on a dispatcher of its own, releasing both
+ * afterwards whatever happens.
+ *
+ * Both are process-wide singletons, so a test that left one behind would take
+ * the next one down with it: shutdown() clears the application and hands the
+ * dispatcher's thread-local slot back.
+ */
+void withApplication(scope void delegate(UIApplication app, ManualEventLoop loop) body)
+{
+    auto loop = new ManualEventLoop;
+    auto dispatcher = new Dispatcher(loop);
+
+    auto app = new UIApplication;
+    scope (exit) app.shutdown();
+
+    body(app, loop);
+}
