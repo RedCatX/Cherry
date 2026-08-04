@@ -105,6 +105,27 @@ class Window : Element
         _platform.close();
     }
 
+package(cherry):
+   /**
+    * Called when the application gains or loses the foreground.
+    *
+    * A plain delegate rather than an event: there is one application, and it
+    * is the only thing entitled to hear this.  It is wired on a single
+    * window -- the main one -- because the platform tells every top-level
+    * window and the application wants to hear it once.
+    */
+    void delegate(bool active) activatedCallback;
+
+   /**
+    * Called when the session is ending; returning false asks to stop it.
+    *
+    * Wired on a single window for the same reason, and safely so: a window
+    * without the callback agrees, and one refusal anywhere is enough to stop
+    * the session.
+    */
+    bool delegate(SessionEndReason reason) sessionEndingCallback;
+
+public:
    /**
     * The native window surface backing this window.
     */
@@ -141,6 +162,22 @@ private:
         void onPaintRequested()
         {
             this.outer.handlePaintRequested();
+        }
+
+        void onActivationChanged(bool active)
+        {
+            if (this.outer.activatedCallback !is null)
+                this.outer.activatedCallback(active);
+        }
+
+        bool onSessionEnding(SessionEndReason reason)
+        {
+            // Nobody listening on this window means nobody objects through
+            // it; another window may still refuse.
+            if (this.outer.sessionEndingCallback is null)
+                return true;
+
+            return this.outer.sessionEndingCallback(reason);
         }
 
         void onMouseDown(MouseButton button, int x, int y)
@@ -372,4 +409,35 @@ unittest
     import std.algorithm : canFind;
 
     assert(getRtti!Window.eventNames.canFind("onClosed"));
+}
+
+unittest
+{
+    // The application-level notifications reach the callbacks an application
+    // wires up, and a window with nothing wired stays out of the way.
+    TestPlatformWindow platform;
+    auto window = new Window((PlatformWindowHost host) {
+        platform = new TestPlatformWindow(host);
+        return cast(PlatformWindow) platform;
+    });
+
+    assert(platform.host.onSessionEnding(SessionEndReason.logoff),
+           "a window nobody listens through must not object to the session ending");
+
+    bool[] activations;
+    window.activatedCallback = (bool active) { activations ~= active; };
+
+    platform.host.onActivationChanged(true);
+    platform.host.onActivationChanged(false);
+    assert(activations == [true, false]);
+
+    SessionEndReason seen;
+    window.sessionEndingCallback = (SessionEndReason reason) {
+        seen = reason;
+        return false;          // the application objects
+    };
+
+    assert(!platform.host.onSessionEnding(SessionEndReason.shutdown),
+           "the application's refusal reaches the platform");
+    assert(seen == SessionEndReason.shutdown);
 }

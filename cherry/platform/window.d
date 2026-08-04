@@ -1,6 +1,19 @@
 module cherry.platform.window;
 
 /**
+ * Why the desktop session is ending.
+ */
+enum SessionEndReason
+{
+    /// The user is logging off.
+    logoff,
+    /// The machine is shutting down or restarting.
+    shutdown,
+    /// The platform did not say, or said something we do not model.
+    unknown
+}
+
+/**
  * Normalized mouse button identity shared by every platform backend.
  */
 enum MouseButton
@@ -31,6 +44,23 @@ interface PlatformWindowHost
 
     /// The platform asks for the window content to be redrawn.
     void onPaintRequested();
+
+   /**
+    * The application this window belongs to gained or lost the foreground.
+    *
+    * Every top-level window of the application is told, so a host that
+    * cares about the application as a whole should either listen through
+    * one window or collapse the repeats itself.
+    */
+    void onActivationChanged(bool active);
+
+   /**
+    * The session is ending; returning false asks the platform to stop it.
+    *
+    * Asked of every top-level window, and any refusal is enough to stop the
+    * session, so a window whose host does not care should simply agree.
+    */
+    bool onSessionEnding(SessionEndReason reason);
 
     /// Mouse input in client coordinates.
     void onMouseDown(MouseButton button, int x, int y);

@@ -10,6 +10,9 @@ import cherry.platform.window;
 
 pragma(lib, "user32");
 
+// Not in druntime's headers.
+private enum LPARAM ENDSESSION_LOGOFF_ = 0x80000000;
+
 /**
  * Win32 implementation of PlatformWindow: a real top-level window whose
  * window procedure translates WM_* messages into the normalized
@@ -108,6 +111,23 @@ private:
                 notify({ _host.onResized(LOWORD(lParam), HIWORD(lParam)); });
                 return 0;
 
+            case WM_ACTIVATEAPP:
+                notify({ _host.onActivationChanged(wParam != 0); });
+                return 0;
+
+            case WM_QUERYENDSESSION:
+            {
+                // A host that fails to answer is taken to agree: a broken
+                // handler must not be what keeps the machine from shutting
+                // down.
+                BOOL allow = TRUE;
+                notify({
+                    allow = _host.onSessionEnding(toSessionEndReason(lParam)) ? TRUE : FALSE;
+                });
+
+                return allow;
+            }
+
             case WM_PAINT:
             {
                 // BeginPaint/EndPaint validate the dirty region; Direct2D
@@ -172,6 +192,16 @@ private:
             {
             }
         }
+    }
+
+    static SessionEndReason toSessionEndReason(LPARAM lParam) pure nothrow @nogc
+    {
+        if (lParam & ENDSESSION_LOGOFF_)
+            return SessionEndReason.logoff;
+
+        // Zero means the machine itself is going down; anything else is a
+        // flag combination we do not model.
+        return lParam == 0 ? SessionEndReason.shutdown : SessionEndReason.unknown;
     }
 
     static int mouseX(LPARAM lParam) pure nothrow @nogc
