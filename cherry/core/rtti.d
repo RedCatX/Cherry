@@ -802,6 +802,24 @@ auto getRtti(T)(T t)
 import std.meta;
 
 /**
+ * T with every qualifier removed that could not have outlived a copy of it.
+ *
+ * Shallow Unqual is not enough for a static array: immutable(float[4]) *is*
+ * immutable(float)[4] -- a static array is its elements, so the qualifier has
+ * already distributed itself over them and has to be peeled off there too.
+ * Everywhere else the outer layer is the whole story, and deliberately so: a
+ * slice keeps its element qualifier, because immutable(char)[] and char[] are
+ * different types and one of them is string.
+ */
+template Unqualified(T)
+{
+    static if (is(T == U[N], U, size_t N))
+        alias Unqualified = Unqualified!U[N];
+    else
+        alias Unqualified = Unqual!T;
+}
+
+/**
  * Returns the canonical Rtti instance describing T.
  *
  * The result is memoized per type, so repeated calls return the very same

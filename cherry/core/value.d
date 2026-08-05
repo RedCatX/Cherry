@@ -127,7 +127,7 @@ struct Value
         }
         else
         {
-            _typeinfo = cast(Rtti)(getRtti!T);
+            _typeinfo = cast(Rtti)(getRtti!(StoredType!T));
 
             static if (isDynamicArray!T)
             {
@@ -199,6 +199,28 @@ struct Value
     {
         _typeinfo = cast(Rtti) getRtti!void;
         _value = _value.init;
+    }
+
+    /**
+     * The type a Value records for the copy it took of a T.
+     *
+     * A Value is a copy, and a qualifier on something through which nothing is
+     * reachable does not survive one: the bytes belong to the Value now and
+     * nobody else can see them, so there is no promise left to keep.  An
+     * immutable float is recorded as a float -- which is what makes
+     * `Value(someImmutableFloat)` assignable to a property of type float, the
+     * same way the plain assignment is legal in D.
+     *
+     * Anything that reaches further keeps its qualifier, because what was
+     * copied is the handle and the promise is about what lies on the other
+     * end: a string stays immutable(char)[], distinct from char[].
+     */
+    template StoredType(T)
+    {
+        static if (hasIndirections!T)
+            alias StoredType = T;
+        else
+            alias StoredType = Unqualified!T;
     }
 
     @property returnT!(S) get(S)() const
@@ -721,4 +743,36 @@ unittest
     const K k = new K;
     Value v = k;
     assert(v.get!(const K) is k);
+}
+
+unittest
+{
+    // A Value is a copy, and a qualifier on something through which nothing is
+    // reachable does not survive one -- the bytes belong to the Value now, and
+    // nobody is left to be promised anything about them.
+    immutable float pinned = 12.5f;
+    auto v = Value(pinned);
+
+    assert(v.typeinfo == getRtti!float);
+    assert(v.get!float == 12.5f);
+
+    // Which is what lets the property system store it: the same question it
+    // asks before writing a value into a property of type float.
+    assert(getRtti!float.isAssignableFrom(cast(immutable(Rtti)) v.typeinfo));
+
+    static struct Plain { float x; float y; }
+    immutable Plain frozen = Plain(1, 2);
+    assert(Value(frozen).typeinfo == getRtti!Plain);
+
+    const int counted = 7;
+    assert(Value(counted).typeinfo == getRtti!int);
+
+    // What reaches further keeps its qualifier: what was copied is the handle,
+    // and the promise is about the other end of it.
+    auto text = Value("cherry");
+    assert(text.typeinfo == getRtti!(immutable(char)[]));
+    assert(text.typeinfo != getRtti!(char[]), "string is not char[], and must not become it");
+
+    immutable(int)[] frozenItems = [1, 2, 3];
+    assert(Value(frozenItems).typeinfo == getRtti!(immutable(int)[]));
 }
