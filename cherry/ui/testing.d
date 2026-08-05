@@ -9,6 +9,7 @@ module cherry.ui.testing;
 version (unittest):
 
 import cherry.core.dispatcher;
+import cherry.core.dispatcher.testing : releaseAmbientDispatcher;
 import cherry.platform;
 import cherry.ui.application;
 import cherry.ui.window;
@@ -96,6 +97,8 @@ TestWindow makeWindow()
  */
 void withApplication(scope void delegate(UIApplication app, ManualEventLoop loop) body)
 {
+    releaseAmbientDispatcher();
+
     auto loop = new ManualEventLoop;
     auto dispatcher = new Dispatcher(loop);
 

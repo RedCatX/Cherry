@@ -54,9 +54,26 @@ import cherry.core.dispatcher.types;
 	*/
     package void withDispatcher(EventLoop loop, scope void delegate(shared(Dispatcher)) body)
     {
+        releaseAmbientDispatcher();
+
         auto d = cast(shared) new Dispatcher(loop);
         scope (exit) d.shutdown();
         body(d);
+    }
+
+    /**
+	* Clears whatever dispatcher this thread is already carrying.
+	*
+	* A DispatcherObject binds to Dispatcher.current, which creates one on
+	* demand, so any test that builds an object outside a helper leaves the
+	* thread holding a dispatcher on the platform's own event loop.  A thread
+	* hosts one dispatcher at a time, so the next test to ask for its own
+	* would be refused -- and it wants its own, on a loop it can step by hand.
+	*/
+    package(cherry) void releaseAmbientDispatcher()
+    {
+        if (auto ambient = Dispatcher.currentOrNull)
+            ambient.shutdown();
     }
 
     /// Convenience overload for the common ManualEventLoop case.

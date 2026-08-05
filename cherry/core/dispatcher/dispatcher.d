@@ -25,11 +25,16 @@ class DispatcherObject
 
     this()
 	{
-		// Bind to the thread's dispatcher if it already has one.  Constructing
-		// an object must not conjure a dispatcher -- and, on Windows, a
-		// message-only window -- as a side effect; the application creates it
-		// explicitly.  An object with no dispatcher simply has no affinity.
-		_dispatcher = Dispatcher.currentOrNull;
+		// Bind to the thread's dispatcher, making one on first use.  A thread
+		// that builds a DispatcherObject is a thread that means to dispatch on
+		// it, so it is given a dispatcher -- and, on Windows, the message-only
+		// window that drives it -- without having to ask for one first.
+		//
+		// What that buys in convenience it charges in ownership: the
+		// dispatcher outlives the object that caused it and holds native
+		// resources, so a worker thread that ends without shutting it down
+		// leaves them behind.
+		_dispatcher = Dispatcher.current;
 	}
 
    /**
