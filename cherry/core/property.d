@@ -396,6 +396,22 @@ final immutable class Property
         assert(ownerType !is null);
     }
     body {
+        return registerCore(name, type, ownerType, metadata, validateValueCallback, cast(Flags) 0);
+    }
+
+   /*
+    * The body of every registration.  Flags travel to the constructor rather
+    * than being stamped on afterwards, so a property is never briefly visible
+    * as something it is not -- and so the two that are read on the hot path
+    * can live on the property itself instead of in shared mutable state.
+    */
+    private static immutable(Property) registerCore(string name,
+                                                    immutable(Rtti) type,
+                                                    immutable(RttiClassType) ownerType,
+                                                    PropertyMetadata metadata,
+                                                    ValidateValueCallback validateValueCallback,
+                                                    Flags flags)
+    {
         PropertyMetadata defaultMetadata;
         if (metadata.changed && metadata.defaultValueWasSet)
 		{
@@ -406,7 +422,7 @@ final immutable class Property
             defaultMetadata = makeDefaultMetadata(type, validateValueCallback, ownerType.name ~ '.' ~ name);
 		}
 
-        immutable(Property) property = new immutable(Property)(name, type, ownerType, defaultMetadata, validateValueCallback);
+        immutable(Property) property = new immutable(Property)(name, type, ownerType, defaultMetadata, validateValueCallback, flags);
 
         if (metadata.changed)
         {
@@ -437,8 +453,8 @@ final immutable class Property
                                                 PropertyMetadata metadata = PropertyMetadata.init,
                                                 ValidateValueCallback validateValueCallback = null)
     {
-        auto property = register(name, type, ownerType, metadata, validateValueCallback);
-        PropertyRegistry.get().setFlag(property._id, Flags.isReadOnlyProperty, true);
+        auto property = registerCore(name, type, ownerType, metadata, validateValueCallback,
+                                     Flags.isReadOnlyProperty);
         return new immutable(ReadOnlyPropertyKey)(property);
     }
 
@@ -473,9 +489,8 @@ final immutable class Property
             defaultMetadata = makeDefaultMetadata(type, validateValueCallback, ownerType.name ~ '.' ~ name);
 		}
 
-        immutable(Property) property = new immutable(Property)(name, type, ownerType, defaultMetadata, validateValueCallback);
-        PropertyRegistry.get().setFlag(property._id, Flags.isAttachedProperty, true);
-        PropertyRegistry.get().setFlag(property._id, Flags.isReadOnlyProperty, true);
+        immutable(Property) property = new immutable(Property)(name, type, ownerType, defaultMetadata, validateValueCallback,
+                                                               cast(Flags)(Flags.isAttachedProperty | Flags.isReadOnlyProperty));
 
         return new immutable(ReadOnlyPropertyKey)(property);
     }
@@ -504,9 +519,8 @@ final immutable class Property
         assert(ownerType !is null);
     }
     body {
-        auto property = new immutable(Property)(name, type, ownerType, defaultMetadata, validateValueCallback);
-        PropertyRegistry.get().setFlag(property._id, Flags.isAttachedProperty, true);
-        return property;
+        return new immutable(Property)(name, type, ownerType, defaultMetadata, validateValueCallback,
+                                       Flags.isAttachedProperty);
     }
 
     /**
@@ -589,14 +603,26 @@ final immutable class Property
         return _id;
 	}
 
-    @property bool isAttached() const
+   /**
+    * Whether this property may be set on objects outside its owner's
+    * hierarchy, and whether it can only be set through its registration key.
+    *
+    * Both are settled at registration and cannot change afterwards, so they
+    * are fields of the property rather than entries in the registry.  That is
+    * not only tidier: isReadOnly is consulted on every setValue, and reading
+    * it out of the registry meant reading shared mutable state -- unlocked,
+    * while another thread could be appending to the very array it indexes --
+    * on the busiest path in the property system.
+    */
+    @property bool isAttached() pure const nothrow
     {
-        return PropertyRegistry.get().getFlag(_id, Flags.isAttachedProperty);
+        return (_flags & Flags.isAttachedProperty) != 0;
     }
 
-    @property bool isReadOnly() const
+    /// ditto
+    @property bool isReadOnly() pure const nothrow
 	{
-        return PropertyRegistry.get().getFlag(_id, Flags.isReadOnlyProperty);
+        return (_flags & Flags.isReadOnlyProperty) != 0;
 	}
 
 protected:
@@ -618,11 +644,13 @@ private:
          immutable(Rtti) type, 
          immutable(RttiClassType) ownerType,
          PropertyMetadata defaultMetadata,
-         ValidateValueCallback validateValueCallback)
+         ValidateValueCallback validateValueCallback,
+         Flags flags = cast(Flags) 0)
     {
         _name = name;
         _type = type;
         _ownerType = ownerType;
+        _flags = flags;
 
         string fullName = buildFullName(ownerType);
 
@@ -717,6 +745,7 @@ private:
 	}
 
     uint                  _id;
+    Flags                 _flags;
     string                _name;
     Rtti                  _type;
     RttiClassType         _ownerType;
@@ -745,9 +774,19 @@ final class PropertyRegistry
 	}
 
 protected:
-    bool getFlag(uint propertyId, Property.Flags flag) const 
+   /*
+    * Under the same lock as setFlag.  What is left here -- isPotentiallyInherited
+    * and isDefaultValueChanged -- can be set long after registration, by
+    * overrideMetadata, and the array being indexed grows under that lock too,
+    * so an unguarded read could catch either mid-change.  The two flags that
+    * are read on a hot path no longer live here; see Property.isReadOnly.
+    */
+    bool getFlag(uint propertyId, Property.Flags flag) const
 	{
-        return (_properties[propertyId].flags & flag) != 0;
+        synchronized ( PropertyRegistry.classinfo )
+		{
+            return (_properties[propertyId].flags & flag) != 0;
+		}
 	}
 
     void setFlag(uint propertyId, Property.Flags flag, bool value)
@@ -930,6 +969,17 @@ unittest
     auto lockedProperty = key.property;
     assert(lockedProperty.isReadOnly);
     assert(!lockedProperty.isAttached);
+
+    // Registration settles both, and nothing can move them afterwards: they
+    // are fields of the property.  Which is also why asking is pure and
+    // nothrow -- setValue asks on every single write, and it used to have to
+    // read shared mutable state to find out.
+    auto plain = Property.register("Open", getRtti!int(), getRtti!Secured());
+    assert(!plain.isReadOnly);
+    assert(!plain.isAttached);
+
+    static assert(__traits(compiles, (immutable(Property) p) pure nothrow => p.isReadOnly));
+    static assert(__traits(compiles, (immutable(Property) p) pure nothrow => p.isAttached));
 
     auto obj = new Secured;
 
