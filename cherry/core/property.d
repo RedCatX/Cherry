@@ -687,7 +687,11 @@ private:
 									 ValidateValueCallback validateValueCallback,
 									 string propertyName)
 	{
-        if ( !propertyType.isAssignableFrom(defaultValue.typeinfo) )
+        // An empty Value carries no type because it stands for the absence of
+        // a value, and absence fits a property of any type.  A property whose
+        // default is empty starts out unset -- which is how a layout property
+        // says "no size of my own; size me to my content".
+        if ( !defaultValue.empty && !propertyType.isAssignableFrom(defaultValue.typeinfo) )
 		{
             throw new Exception("Failed to assign default value for " ~ propertyName ~ " property: types mismatch.");
 		}

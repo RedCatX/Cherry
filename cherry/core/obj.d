@@ -151,7 +151,10 @@ private:
         immutable metadata = resolveMetadata(property);
 
         // 1. The value must be assignable to the property's declared type.
-        if (!property.type.isAssignableFrom(value.typeinfo))
+        //    An empty Value is the exception, for the same reason it is one at
+        //    registration: it is not a value of the wrong type, it is the
+        //    absence of one, and any property may be left without a value.
+        if (!value.empty && !property.type.isAssignableFrom(value.typeinfo))
             throw new Exception("A value of type " ~ value.typeinfo.toString()
                 ~ " cannot be assigned to property '" ~ property.name
                 ~ "' of type " ~ property.type.toString() ~ ".");
