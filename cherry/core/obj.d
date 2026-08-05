@@ -71,6 +71,8 @@ class CherryObject : DispatcherObject
         assert(property !is null);
     }
     do {
+        verifyAccess();
+
         if (property.isReadOnly)
             throw new Exception("Property '" ~ property.name
                 ~ "' is read-only and cannot be set directly.");
@@ -89,6 +91,8 @@ class CherryObject : DispatcherObject
         assert(key !is null);
     }
     do {
+        verifyAccess();
+
         setValueCore(key.property, value);
     }
 
@@ -100,6 +104,8 @@ class CherryObject : DispatcherObject
         assert(property !is null);
     }
     do {
+        verifyAccess();
+
         _values.remove(property.id);
     }
 
