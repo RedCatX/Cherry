@@ -418,7 +418,7 @@ class Element : CherryObject
         if (isHeightSet)
             constraint.height = height;
 
-        auto measured = measureOverride(constraint);
+        immutable measured = measureOverride(constraint);
 
         // What the element asks for: the size it was given where it was given
         // one, and what its content needs everywhere else.
@@ -437,10 +437,10 @@ class Element : CherryObject
     */
     final void arrange(Rect finalRect)
     {
-        auto previous = Size(actualWidth, actualHeight);
+        immutable previous = Size(actualWidth, actualHeight);
 
         _arrangedRect = finalRect;
-        auto arranged = arrangeOverride(Size(finalRect.width, finalRect.height));
+        immutable arranged = arrangeOverride(Size(finalRect.width, finalRect.height));
 
         setValue(actualWidthKey,  Value(arranged.width));
         setValue(actualHeightKey, Value(arranged.height));

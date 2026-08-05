@@ -152,8 +152,34 @@ class Rtti
         _qualifiers = qualifiers;
     }
 
+   /**
+    * Whether a value of this type can reach memory that is not part of the
+    * value itself: a class reference, a pointer, the elements behind a slice.
+    *
+    * This is what decides whether qualifiers matter to an assignment.  Copying
+    * a value that reaches nothing hands over every byte of it and nothing
+    * else, so `float x = someImmutableFloat` is sound and D accepts it.
+    * Copying one that does reach further hands over a second way into shared
+    * memory under a different qualifier, which is why `int[] a = someImmutable`
+    * is refused.
+    *
+    * True unless a subclass knows better: the conservative answer only ever
+    * refuses an assignment that would have been allowed.
+    */
+    @property bool hasIndirections() pure const nothrow
+    {
+        return true;
+    }
+
     protected bool canImplicitCastQualifiersToThis(Qualifier q) pure const nothrow
     {
+        // Nothing is reachable through this type, so the source's qualifier
+        // describes nothing that survives the copy and cannot conflict with
+        // the destination's.  The matrix below is about what a value reaches;
+        // where it reaches nothing, it has nothing to say.
+        if (!hasIndirections)
+            return true;
+
         if (q == Qualifier.None)
         {
             return _qualifiers == Qualifier.None 
@@ -212,6 +238,10 @@ private:
 
 class RttiIntegerType : Rtti
 {
+    override @property bool hasIndirections() pure const nothrow
+    {
+        return false;
+    }
     override bool isAssignableFrom(immutable(Rtti) other) const
     {
         if (!other)
@@ -260,6 +290,10 @@ class RttiIntegerType : Rtti
 
 class RttiFloatType : Rtti
 {
+    override @property bool hasIndirections() pure const nothrow
+    {
+        return false;
+    }
     override bool isAssignableFrom(immutable(Rtti) other) const
     {
         if (!other)
@@ -301,6 +335,10 @@ class RttiFloatType : Rtti
 
 class RttiEnumType : Rtti
 {
+    override @property bool hasIndirections() pure const nothrow
+    {
+        return _innerType.hasIndirections;
+    }
     override bool isAssignableFrom(immutable(Rtti) other) const
     {
         if (!other)
@@ -362,6 +400,14 @@ private:
 
 class RttiArrayType : Rtti
 {
+    override @property bool hasIndirections() pure const nothrow
+    {
+        // A static array is its elements; a slice or a map is a handle
+        // on elements that live elsewhere.
+        return type == Rtti.Type.StaticArray
+            ? _elementType.hasIndirections
+            : true;
+    }
     override bool isAssignableFrom(immutable(Rtti) other) const
     {
         if (!other)
@@ -646,6 +692,10 @@ private:
 
 class RttiStructType : Rtti
 {
+    override @property bool hasIndirections() pure const nothrow
+    {
+        return _hasIndirections;
+    }
     override bool isAssignableFrom(immutable(Rtti) other) const
     {
         if (!other)
@@ -672,10 +722,16 @@ class RttiStructType : Rtti
     protected immutable this(const string name, 
                              size_t size, 
 							 const(void)* initPtr, 
+                             bool hasIndirections,
                              Rtti.Qualifier qualifiers)
     {
         super(name, size, initPtr, Rtti.Type.Struct, qualifiers);
+        _hasIndirections = hasIndirections;
     }
+
+    // A struct's fields are not in the Rtti graph, so this cannot be worked
+    // out after the fact.  std.traits knows it where the Rtti is built.
+    private bool _hasIndirections;
 }
 
 class RttiPointerType : Rtti
@@ -946,6 +1002,7 @@ private auto makeRtti(T)()
         return new immutable(RttiStructType)(fullyQualifiedName!T, 
 											 T.sizeof, 
 											 typeid(T).initializer.ptr, 
+											 hasIndirections!T,
 											 qualifiers);
     }
     else static if (isSomeFunction!T)
@@ -1216,4 +1273,30 @@ unittest
     assert(!emitter.eventNames.canFind("notAnEvent"));
 
     assert(getRtti!Silent.eventNames.length == 0);
+}
+
+unittest
+{
+    // Qualifiers only matter to an assignment as far as the value can reach.
+    // A float reaches nothing, so a copy of an immutable one is a plain float
+    // and D accepts the assignment -- getRtti must agree with the language.
+    assert(getRtti!float.isAssignableFrom(getRtti!(immutable float)));
+    assert(getRtti!float.isAssignableFrom(getRtti!(const float)));
+    assert(getRtti!float.isAssignableFrom(getRtti!(shared float)));
+    assert(getRtti!(shared float).isAssignableFrom(getRtti!float));
+    assert(getRtti!(immutable float).isAssignableFrom(getRtti!float));
+
+    assert(getRtti!int.isAssignableFrom(getRtti!(immutable int)));
+    assert(getRtti!double.isAssignableFrom(getRtti!(immutable float)));
+
+    // A slice is a handle on elements kept elsewhere, and immutability is a
+    // promise about those elements, so it has to hold.
+    assert(!getRtti!(int[]).isAssignableFrom(getRtti!(immutable(int[]))));
+    assert(!getRtti!(int[]).isAssignableFrom(getRtti!(const(int[]))));
+    assert(!getRtti!(shared(int[])).isAssignableFrom(getRtti!(int[])));
+
+    // Same for a class reference: two names for one object, and one of them
+    // would be promising something the other could break.
+    static class Node { }
+    assert(!getRtti!Node.isAssignableFrom(getRtti!(immutable Node)));
 }
