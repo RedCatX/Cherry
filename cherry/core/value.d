@@ -318,12 +318,18 @@ struct Value
                 return 0;
 
             case Rtti.Type.Integer:
-            case Rtti.Type.Float:
             case Rtti.Type.Enum:
             case Rtti.Type.Struct:
             case Rtti.Type.Pointer:
             case Rtti.Type.Function:
                 return hashOf(rawBytes());
+
+            case Rtti.Type.Float:
+                // Hashed through the same normalisation equality uses, or -0.0
+                // and 0.0 would compare equal and hash apart.  Narrowing to
+                // double can only make two unequal reals collide, which a hash
+                // is allowed to do; it can never split two equal ones.
+                return hashOf(cast(double) normalizeFloat(readFloat()));
 
             case Rtti.Type.StaticArray:
                 return hashOf((cast(const(ubyte)[]) _value.heap)[0 .. _typeinfo.size]);
@@ -391,15 +397,71 @@ private:
         }
     }
 
-    double readFloat() const
+   /*
+    * Read as real, which holds a float, a double and a real without losing
+    * anything.  Reading a real as a double used to round it, so two values
+    * that differ past the 53rd bit compared equal.
+    */
+    real readFloat() const
     {
         auto p = rawBytes().ptr;
         switch (_typeinfo.size)
         {
             case 4:  return *cast(const(float)*) p;
             case 8:  return *cast(const(double)*) p;
-            default: return cast(double) *cast(const(real)*) p;
+            default: return *cast(const(real)*) p;
         }
+    }
+
+   /*
+    * Float comparison, answered the same way by equality, ordering and
+    * hashing.  Two rules depart from IEEE, both for the same reason: a Value
+    * is compared to decide whether something changed and to find it again in
+    * a container, and neither survives a value that is not equal to itself.
+    *
+    *   - NaN equals NaN.  Otherwise a property set to NaN would report a
+    *     change on every assignment for as long as the program ran, and a
+    *     Value could be put into a container and never found.
+    *   - -0.0 equals 0.0, which is what IEEE says and what the bytes deny.
+    *
+    * .NET settled on the same two for Equals and CompareTo, and for the same
+    * reasons.  Comparing a Value against a bare float still goes through that
+    * float's own ==, which is IEEE: that asks a different question, about a
+    * number rather than about a stored value.
+    */
+    static bool floatEquals(real a, real b)
+    {
+        // `a != a` is the NaN test, without reaching for std.math.
+        return a == b || (a != a && b != b);
+    }
+
+    static int floatCompare(real a, real b)
+    {
+        if (a < b)
+            return -1;
+        if (a > b)
+            return 1;
+        if (a == b)
+            return 0;   // including -0.0 against 0.0
+
+        // What is left involves a NaN.  Placing every NaN before every number
+        // is arbitrary, but it is total, which is what a sorted container
+        // needs -- and two NaNs come out equal, as floatEquals says they are.
+        immutable aIsNaN = a != a;
+        immutable bIsNaN = b != b;
+
+        if (aIsNaN && bIsNaN)
+            return 0;
+
+        return aIsNaN ? -1 : 1;
+    }
+
+    static real normalizeFloat(real v)
+    {
+        if (v != v)
+            return real.nan;    // every NaN hashes as one
+
+        return v == 0 ? 0.0L : v;   // and -0.0 hashes as 0.0
     }
 
    /*
@@ -417,12 +479,14 @@ private:
                 return true;
 
             case Rtti.Type.Integer:
-            case Rtti.Type.Float:
             case Rtti.Type.Enum:
             case Rtti.Type.Struct:
             case Rtti.Type.Pointer:
             case Rtti.Type.Function:
                 return rawBytes() == other.rawBytes();
+
+            case Rtti.Type.Float:
+                return floatEquals(readFloat(), other.readFloat());
 
             case Rtti.Type.StaticArray:
                 return (cast(const(ubyte)[]) _value.heap)[0 .. _typeinfo.size]
@@ -468,8 +532,7 @@ private:
                 }
 
             case Rtti.Type.Float:
-                immutable a = readFloat(), b = other.readFloat();
-                return a < b ? -1 : (a > b ? 1 : 0);
+                return floatCompare(readFloat(), other.readFloat());
 
             default:
                 return valueEquals(other) ? 0 : -1;
@@ -775,4 +838,44 @@ unittest
 
     immutable(int)[] frozenItems = [1, 2, 3];
     assert(Value(frozenItems).typeinfo == getRtti!(immutable(int)[]));
+}
+
+unittest
+{
+    // Equality, ordering and hashing answer the same way about floats, which
+    // IEEE on its own does not give: it makes NaN unequal to itself, and the
+    // bytes make -0.0 unequal to 0.0.
+    auto nan1 = Value(double.nan);
+    auto nan2 = Value(double.nan);
+    auto zero = Value(0.0);
+    auto negZero = Value(-0.0);
+    auto one = Value(1.0);
+
+    assert(nan1 == nan2, "a value must equal itself, or it can never be found again");
+    assert(nan1.opCmp(nan2) == 0);
+    assert(nan1.toHash() == nan2.toHash());
+
+    assert(zero == negZero, "one number, whatever the bytes say");
+    assert(zero.opCmp(negZero) == 0);
+    assert(zero.toHash() == negZero.toHash(), "equal values, equal hashes");
+
+    // NaN is ordered arbitrarily but totally, so a sorted container has
+    // somewhere to put it -- and 0 no longer means "equal or unordered".
+    assert(nan1.opCmp(one) < 0);
+    assert(one.opCmp(nan1) > 0);
+
+    // Ordinary ordering is untouched.
+    assert(one.opCmp(Value(2.0)) < 0);
+    assert(Value(2.0).opCmp(one) > 0);
+    assert(one.opCmp(Value(1.0)) == 0);
+    assert(one == Value(1.0));
+    assert(one != Value(2.0));
+
+    // A real is compared at its own width.  Both of these round to the same
+    // double, and ordering read them as one -- so it called them equal while
+    // equality, which went by the bytes, did not.
+    assert(Value(1.0L + real.epsilon) != Value(1.0L));
+    assert(Value(1.0L + real.epsilon).opCmp(Value(1.0L)) > 0);
+    assert(Value(1.0L) == Value(1.0L));
+    assert(Value(1.0L).opCmp(Value(1.0L)) == 0);
 }
