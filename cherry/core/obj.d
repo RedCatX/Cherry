@@ -20,12 +20,24 @@ import cherry.core.dispatcher;
 class CherryObject : DispatcherObject
 {
    /**
-    * Runtime type information for this instance's dynamic type, or null if no
-    * RTTI has been created for that type.  Used to resolve per-type metadata.
+    * Runtime type information for this instance: its own dynamic type if that
+    * type has any, otherwise the nearest ancestor that does, and null when no
+    * class in the chain has RTTI at all.  Used to resolve per-type metadata.
+    *
+    * The walk up matters.  RTTI exists only for types that asked for it, and
+    * in practice that means types that registered a property; a class that
+    * merely uses what it inherits registers none.  Looking up its own name
+    * alone would find nothing, metadata would fall back to the property's
+    * bare default, and every per-type override the base class registered --
+    * change callbacks included -- would be silently skipped.
     */
     @property immutable(RttiClassType) rtti() const
     {
-        return rttiForName(typeid(this).name);
+        for (TypeInfo_Class type = typeid(this); type !is null; type = type.base)
+            if (auto found = rttiForName(type.name))
+                return found;
+
+        return null;
     }
 
    /**

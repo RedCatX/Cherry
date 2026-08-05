@@ -57,6 +57,49 @@ class Window : Element
     static immutable(Property) widthProperty;
     static immutable(Property) heightProperty;
 
+    @property string title() const
+    {
+        return getValue(titleProperty).get!string;
+    }
+
+    @property void title(string value)
+    {
+        setValue(titleProperty, Value(value));
+    }
+
+    @property int width() const
+    {
+        return getValue(widthProperty).get!int;
+    }
+
+    @property void width(int value)
+    {
+        setValue(widthProperty, Value(value));
+    }
+
+    @property int height() const
+    {
+        return getValue(heightProperty).get!int;
+    }
+
+    @property void height(int value)
+    {
+        setValue(heightProperty, Value(value));
+    }
+
+	/**
+    * Raised when the window is about to close, whether the request came from
+    * the user or from close().  Setting cancel keeps the window open; pair
+    * that with hide() to make the close button put the window away instead.
+    *
+    * Shutting the application down does not raise this: by then the decision
+    * has been made elsewhere, and a window is not entitled to veto it.
+    */
+    @event @property auto onClosing()
+    {
+        return eventAccessor(&_onClosing);
+    }
+
    /**
     * Raised after the native window has been destroyed.  A plain Multicast
     * event: window lifetime is not a tree concern, so it does not route.
@@ -154,19 +197,6 @@ class Window : Element
 
         if (!cancel)
             forceClose();
-    }
-
-   /**
-    * Raised when the window is about to close, whether the request came from
-    * the user or from close().  Setting cancel keeps the window open; pair
-    * that with hide() to make the close button put the window away instead.
-    *
-    * Shutting the application down does not raise this: by then the decision
-    * has been made elsewhere, and a window is not entitled to veto it.
-    */
-    @event @property auto onClosing()
-    {
-        return eventAccessor(&_onClosing);
     }
 
 package(cherry):
@@ -399,6 +429,36 @@ unittest
     window.close();
     assert(platform.destroyed);
     assert(closedSeen);
+}
+
+unittest
+{
+    // A subclass that registers no properties of its own still resolves the
+    // base class's per-type metadata.  Without it the change callbacks are
+    // never found, and a window that sets its own title in its constructor --
+    // which is what a subclass is for -- would never show it.
+    static class DerivedWindow : Window
+    {
+        this(scope PlatformWindow delegate(PlatformWindowHost) platformFactory)
+        {
+            super(platformFactory);
+        }
+    }
+
+    TestPlatformWindow platform;
+    auto window = new DerivedWindow((PlatformWindowHost host) {
+        platform = new TestPlatformWindow(host);
+        return cast(PlatformWindow) platform;
+    });
+
+    assert(rttiForName(typeid(window).name) is null,
+           "the subclass registers nothing, so it has no RTTI of its own");
+
+    window.setValue(Window.titleProperty, Value("Derived"));
+    assert(platform.title == "Derived");
+
+    window.setValue(Window.widthProperty, Value(1024));
+    assert(platform.width == 1024);
 }
 
 unittest
