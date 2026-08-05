@@ -142,6 +142,16 @@ protected:
 
 private:
    /*
+    * The type rule in one place.  An empty Value fits any property: it is not
+    * a value of the wrong type but the absence of one, and a property may be
+    * left without a value whatever its type.
+    */
+    static bool fits(immutable(Property) property, ref const Value value)
+    {
+        return value.empty || property.type.isAssignableFrom(value.typeinfo);
+    }
+
+   /*
     * Core assignment path: type-check, validate, coerce, store, notify.
     * Bypasses the read-only guard; external code reaches it only through
     * the ReadOnlyPropertyKey overload of setValue.
@@ -151,10 +161,7 @@ private:
         immutable metadata = resolveMetadata(property);
 
         // 1. The value must be assignable to the property's declared type.
-        //    An empty Value is the exception, for the same reason it is one at
-        //    registration: it is not a value of the wrong type, it is the
-        //    absence of one, and any property may be left without a value.
-        if (!value.empty && !property.type.isAssignableFrom(value.typeinfo))
+        if (!fits(property, value))
             throw new Exception("A value of type " ~ value.typeinfo.toString()
                 ~ " cannot be assigned to property '" ~ property.name
                 ~ "' of type " ~ property.type.toString() ~ ".");
@@ -165,9 +172,21 @@ private:
                 throw new Exception("The value assigned to property '"
                     ~ property.name ~ "' failed validation.");
 
-        // 3. Coerce the value into its final form.
+        // 3. Coerce the value into its final form, and hold it to the same
+        //    rule as the caller.  A coerce callback is ordinary code and can
+        //    return the wrong type; stored unchecked, that surfaces as a
+        //    failure at the next read of the property, by which point nothing
+        //    connects it to the coercion that caused it.
         if (auto coerce = metadata.onCoerceValue)
+        {
             value = coerce(this, value);
+
+            if (!fits(property, value))
+                throw new Exception("The coerce callback for property '"
+                    ~ property.name ~ "' returned a value of type "
+                    ~ value.typeinfo.toString() ~ ", which cannot be assigned to "
+                    ~ property.type.toString() ~ ".");
+        }
 
         // 4. Store, and notify only when the effective value actually changed.
         Value oldValue = getValue(property);

@@ -29,6 +29,13 @@ final class Widget : CherryObject
         widthMeta.onPropertyChanged ~= &onWidthChanged;
 
         widthProperty = Property.register("Width", getRtti!int(), getRtti!Widget(), widthMeta);
+
+        // A coerce callback that returns the wrong type, so that the check on
+        // its result has something to catch.
+        PropertyMetadata strayMeta;
+        strayMeta.defaultValue = Value(0);
+        strayMeta.onCoerceValue = &coerceToText;
+        strayProperty = Property.register("Stray", getRtti!int(), getRtti!Widget(), strayMeta);
         titleProperty = Property.register("Title", getRtti!string(), getRtti!Widget());
         evenProperty  = Property.register("Even", getRtti!int(), getRtti!Widget(),
                                           PropertyMetadata.init, &isEven);
@@ -37,6 +44,7 @@ final class Widget : CherryObject
     static immutable(Property) widthProperty;
     static immutable(Property) titleProperty;
     static immutable(Property) evenProperty;
+    static immutable(Property) strayProperty;
 }
 
 private int widthChangedCount;
@@ -44,6 +52,11 @@ private int widthChangedCount;
 private Value clampNonNegative(Object, Value v)
 {
     return v.get!int < 0 ? Value(0) : v;
+}
+
+private Value coerceToText(Object, Value)
+{
+    return Value("not a number");
 }
 
 private bool isEven(const(Value) v)
@@ -96,4 +109,18 @@ unittest
     auto w2 = new Widget;
     w.setValue(Widget.widthProperty, Value(10));
     assert(w2.getValue(Widget.widthProperty).get!int == 100);
+}
+
+unittest
+{
+    // A coerce callback is held to the same rule as the caller.  Without the
+    // check its result would go straight into the store, and the mistake would
+    // only be heard about at the next read of the property -- by which point
+    // nothing points back at the coercion.
+    auto w = new Widget;
+
+    assertThrown(w.setValue(Widget.strayProperty, Value(1)));
+
+    assert(!w.hasLocalValue(Widget.strayProperty), "and nothing was stored");
+    assert(w.getValue(Widget.strayProperty).get!int == 0);
 }
