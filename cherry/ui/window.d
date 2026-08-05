@@ -1,5 +1,6 @@
 module cherry.ui.window;
 
+import cherry.ui.application : UIApplication;
 import cherry.core.multicast;
 import cherry.core.property;
 import cherry.core.rtti;
@@ -8,6 +9,7 @@ import cherry.platform;
 import cherry.ui.element;
 import cherry.ui.event;
 import cherry.ui.input;
+
 
 /**
  * A delegate type for handling a window that is about to close.
@@ -83,12 +85,23 @@ class Window : Element
         assert(platformFactory !is null);
     }
     do {
+        /*auto app = UIApplication.instance;
+        if (app is null)
+            throw new Exception("Window requires a UIApplication instance.");*/
+
         _platform = platformFactory(new PlatformHost);
 
         // Push the effective (default or preset) values to the platform.
         _platform.setTitle(getValue(titleProperty).get!string);
         _platform.setClientSize(getValue(widthProperty).get!int,
                                 getValue(heightProperty).get!int);
+
+        // Register new Window object in UIApplication
+        if (UIApplication.instance !is null)
+		{
+            UIApplication.instance.registerWindow(this);
+            _registered = true;
+        }
     }
 
    /**
@@ -263,6 +276,10 @@ private:
         _destroyed = true;
         handleDisposedRenderer();
 
+        // Unregister this Window object from UIApplication
+        if (_registered)
+            UIApplication.instance.unregisterWindow(this);  
+
         _onClosed(this);
     }
 
@@ -347,6 +364,7 @@ private:
     Multicast!WindowClosingHandler _onClosing;
     bool _syncingFromPlatform;
     bool _destroyed;
+    bool _registered;
 }
 
 version (unittest)

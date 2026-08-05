@@ -5,6 +5,7 @@ import core.time : Duration, MonoTime;
 import cherry.core.multicast;
 import cherry.core.dispatcher.dispatcher;
 import cherry.core.dispatcher.types;
+import cherry.core.value;
 
 /**
  * A delegate type for handling timer ticks.
@@ -78,18 +79,33 @@ final class DispatcherTimer : DispatcherObject
    /**
     * Whether the timer is running.  Assigning is start() or stop().
     */
-    @property bool isEnabled() const pure nothrow @nogc
+    @property bool enabled() const pure nothrow @nogc
     {
         return _enabled;
     }
 
     /// ditto
-    @property void isEnabled(bool value)
+    @property void enabled(bool value)
     {
         if (value)
             start();
         else
             stop();
+    }
+
+   /**
+    * Any data that the caller wants to pass along with the timer.
+    */
+    @property const(Value) tag() const pure nothrow @nogc
+    {
+        return _tag;
+    }
+
+    /// ditto
+    @property void tag(Value value)
+    {
+        verifyAccess();
+        _tag = value;
     }
 
    /**
@@ -103,7 +119,7 @@ final class DispatcherTimer : DispatcherObject
         if (_enabled)
             return;
 
-        auto owner = dispatcher;
+        auto owner = cast(Dispatcher) dispatcher;
         if (owner is null)
             throw new Exception("A timer cannot run on a thread that has no dispatcher.");
 
@@ -125,7 +141,7 @@ final class DispatcherTimer : DispatcherObject
 
         _enabled = false;
 
-        if (auto owner = dispatcher)
+        if (auto owner = cast(Dispatcher) dispatcher)
             owner.removeTimer(this);
     }
 
@@ -170,6 +186,7 @@ private:
     DispatcherPriority _priority;
     bool               _enabled;
     MonoTime           _dueAt;
+    Value              _tag;
 
     Multicast!DispatcherTimerHandler _onTick;
 }
@@ -208,15 +225,15 @@ unittest // ticks arrive on the dispatcher thread until the timer is stopped
             }
         };
 
-        assert(!timer.isEnabled);
+        assert(!timer.enabled);
         timer.start();
-        assert(timer.isEnabled);
+        assert(timer.enabled);
 
         pump(d);
 
         assert(ticks == 3, "the timer keeps ticking until it is stopped");
         assert(alwaysOnOwner, "a tick belongs to the dispatcher thread");
-        assert(!timer.isEnabled);
+        assert(!timer.enabled);
     });
 }
 

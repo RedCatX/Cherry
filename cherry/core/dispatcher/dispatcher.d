@@ -41,9 +41,9 @@ class DispatcherObject
         return _dispatcher;
     }
 
-    @property Dispatcher dispatcher() pure nothrow @nogc
+    @property shared(Dispatcher) dispatcher() pure nothrow @nogc
     {
-        return cast(Dispatcher) _dispatcher;
+        return _dispatcher;
     }
 
    /**
