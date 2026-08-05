@@ -888,7 +888,12 @@ private auto makeRtti(T)()
     {
         auto base = getRtti!(OriginalType!T);
         string fullName = fullyQualifiedName!T;
-		RttiEnumType.EnumValues* eValues = (fullName in RttiEnumType.s_enumValuesRegistry); 
+
+        // The members belong to the enum, not to the qualifier it was
+        // asked for, so const(Corner) and immutable(Corner) share one
+        // table with Corner rather than each building a copy.
+        enum string valuesKey = fullyQualifiedName!(Unqual!T);
+		RttiEnumType.EnumValues* eValues = (valuesKey in RttiEnumType.s_enumValuesRegistry); 
 
         if (!eValues)
 		{
@@ -899,13 +904,13 @@ private auto makeRtti(T)()
 				enum member = __traits(getMember, T, memberName);
 				eValues.names ~= memberName;
 
-				auto buf = new T;
+				auto buf = new Unqual!T;   // an immutable buffer cannot be written to
 				*buf = member;
 
 				eValues.values ~= cast(void*) buf;
 			}
 
-            RttiEnumType.s_enumValuesRegistry[fullName] = *eValues; 
+            RttiEnumType.s_enumValuesRegistry[valuesKey] = *eValues; 
 		}
 
         return new immutable(RttiEnumType)(fullName, 
@@ -1275,6 +1280,22 @@ unittest
     assert(getRtti!Silent.eventNames.length == 0);
 }
 
+enum Corner : int { topLeft, topRight, bottomLeft }
+
+unittest
+{
+    // Building the RTTI of a qualified enum used to fail outright: every
+    // member value was written into a buffer of the qualified type itself,
+    // and an immutable one cannot be written to.
+    auto plain  = getRtti!Corner;
+    auto frozen = getRtti!(immutable Corner);
+
+    assert(frozen.qualifiers == Rtti.Qualifier.Immutable);
+    assert(frozen.names.length == 3);
+    assert(frozen.names == plain.names, "the members belong to the enum, not to the qualifier");
+    assert(frozen.innerType.type == Rtti.Type.Integer);
+}
+
 unittest
 {
     // Qualifiers only matter to an assignment as far as the value can reach.
@@ -1288,6 +1309,9 @@ unittest
 
     assert(getRtti!int.isAssignableFrom(getRtti!(immutable int)));
     assert(getRtti!double.isAssignableFrom(getRtti!(immutable float)));
+
+    // An enum is as reachable as the type behind it.
+    assert(getRtti!int.isAssignableFrom(getRtti!(immutable Corner)));
 
     // A slice is a handle on elements kept elsewhere, and immutability is a
     // promise about those elements, so it has to hold.
