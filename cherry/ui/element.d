@@ -1,7 +1,11 @@
 module cherry.ui.element;
 
+import cherry.core.multicast : event;
 import cherry.core.obj;
-import cherry.platform.render : DrawingContext;
+import cherry.core.property;
+import cherry.core.rtti;
+import cherry.core.value;
+import cherry.platform.render : DrawingContext, Rect, Size;
 import cherry.ui.event;
 
 /**
@@ -20,6 +24,127 @@ import cherry.ui.event;
  */
 class Element : CherryObject
 {
+    shared static this()
+    {
+        // Unset by default.  A size an element was never given is not zero and
+        // not any other number: it is a question the layout answers, and only
+        // an element that was told otherwise overrides the answer.
+        PropertyMetadata sizeMeta;
+        sizeMeta.defaultValue = Value.init;
+        sizeMeta.affectsMeasure = true;
+
+        widthProperty  = Property.register("Width",  getRtti!float(), getRtti!Element(), sizeMeta);
+        heightProperty = Property.register("Height", getRtti!float(), getRtti!Element(), sizeMeta);
+
+        // The arranged size, written by arrange() and by nothing else: the key
+        // stays private, so the only way into these is through the layout pass
+        // that produced them.
+        PropertyMetadata actualMeta;
+        actualMeta.defaultValue = Value(0.0f);
+
+        actualWidthKey  = Property.registerReadOnly("ActualWidth",  getRtti!float(), getRtti!Element(), actualMeta);
+        actualHeightKey = Property.registerReadOnly("ActualHeight", getRtti!float(), getRtti!Element(), actualMeta);
+
+        sizeChangedEvent = RoutedEvent.register("SizeChanged", RoutingStrategy.direct, getRtti!Element());
+    }
+
+    static immutable(Property) widthProperty;
+    static immutable(Property) heightProperty;
+    static immutable(RoutedEvent) sizeChangedEvent;
+
+   /**
+    * The size arrange settled on, as read-only properties.  They are what the
+    * element is; width and height are only what it asked to be.
+    */
+    static @property immutable(Property) actualWidthProperty() pure nothrow
+    {
+        return actualWidthKey.property;
+    }
+
+    /// ditto
+    static @property immutable(Property) actualHeightProperty() pure nothrow
+    {
+        return actualHeightKey.property;
+    }
+
+   /**
+    * The width this element asks for, or NaN when it asks for none.
+    *
+    * Unset is the ordinary state and the useful one: it means "size me to my
+    * content" and leaves the decision with the layout.  Assigning a width
+    * takes the decision away -- the element then insists on exactly this much,
+    * whatever its content would have needed.  clearValue(widthProperty) hands
+    * it back.
+    *
+    * Absence is stored as an empty Value rather than as NaN, so a width that
+    * was never set cannot slip into arithmetic and quietly poison a whole
+    * subtree of sums.  NaN appears only here, at the boundary where a float
+    * has to be returned; layout asks isWidthSet and never reads this.
+    */
+    @property float width() const
+    {
+        auto value = getValue(widthProperty);
+        return value.empty ? float.nan : value.get!float;
+    }
+
+    /// ditto
+    @property void width(float value)
+    {
+        setValue(widthProperty, Value(value));
+    }
+
+    /// ditto
+    @property float height() const
+    {
+        auto value = getValue(heightProperty);
+        return value.empty ? float.nan : value.get!float;
+    }
+
+    /// ditto
+    @property void height(float value)
+    {
+        setValue(heightProperty, Value(value));
+    }
+
+   /**
+    * Whether a width of its own was set on this element.  The question layout
+    * asks, and the honest form of "is width NaN".
+    */
+    @property bool isWidthSet() const
+    {
+        return !getValue(widthProperty).empty;
+    }
+
+    /// ditto
+    @property bool isHeightSet() const
+    {
+        return !getValue(heightProperty).empty;
+    }
+
+   /**
+    * The size this element was last arranged at.
+    */
+    @property float actualWidth() const
+    {
+        return getValue(actualWidthProperty).get!float;
+    }
+
+    /// ditto
+    @property float actualHeight() const
+    {
+        return getValue(actualHeightProperty).get!float;
+    }
+
+   /**
+    * Raised after arrange has given this element a size different from the one
+    * it had.  A direct routed event: a parent resizing does not mean a child
+    * did, so there is nothing to bubble.
+    */
+    @event @property auto onSizeChanged()
+    {
+        return routedAccessor(this, sizeChangedEvent);
+    }
+
    /**
     * The element this one is parented to, or null for a tree root.
     */
@@ -276,7 +401,128 @@ class Element : CherryObject
         return r;
     }
 
+   /**
+    * Measures the element against the space the parent can offer, leaving the
+    * answer in desiredSize.
+    *
+    * A width or height of its own replaces what was offered rather than
+    * competing with it: an element told to be 200 wide is measured against
+    * 200, so its content arranges itself for the width it will really get.
+    */
+    final void measure(Size availableSize)
+    {
+        auto constraint = availableSize;
+
+        if (isWidthSet)
+            constraint.width = width;
+        if (isHeightSet)
+            constraint.height = height;
+
+        auto measured = measureOverride(constraint);
+
+        // What the element asks for: the size it was given where it was given
+        // one, and what its content needs everywhere else.
+        _desiredSize = Size(isWidthSet  ? width  : measured.width,
+                            isHeightSet ? height : measured.height);
+        _measureDirty = false;
+    }
+
+   /**
+    * Places the element in the rectangle the parent settled on and records the
+    * outcome in actualWidth and actualHeight.
+    *
+    * Raises onSizeChanged when that outcome differs from the last one, after
+    * the children have been arranged -- so a handler looks at a subtree that
+    * has already taken its new shape, not one halfway there.
+    */
+    final void arrange(Rect finalRect)
+    {
+        auto previous = Size(actualWidth, actualHeight);
+
+        _arrangedRect = finalRect;
+        auto arranged = arrangeOverride(Size(finalRect.width, finalRect.height));
+
+        setValue(actualWidthKey,  Value(arranged.width));
+        setValue(actualHeightKey, Value(arranged.height));
+        _arrangeDirty = false;
+
+        if (arranged.width != previous.width || arranged.height != previous.height)
+            raiseEvent(new SizeChangedEventArgs(sizeChangedEvent, previous, arranged));
+    }
+
+   /**
+    * The size this element asked for at the last measure.
+    */
+    @property Size desiredSize() const pure nothrow @nogc
+    {
+        return _desiredSize;
+    }
+
+   /**
+    * The rectangle this element was last arranged into, in its parent's
+    * coordinate space.
+    */
+    @property Rect arrangedRect() const pure nothrow @nogc
+    {
+        return _arrangedRect;
+    }
+
+   /**
+    * Marks the measured size as out of date.
+    *
+    * Nothing schedules a fresh pass yet: a window lays out when the platform
+    * hands it a size, and that is the whole of the layout there is to drive.
+    * The layout queue hooks in here when it arrives, and callers will not have
+    * to change.
+    */
+    void invalidateMeasure()
+    {
+        _measureDirty = true;
+        _arrangeDirty = true;
+    }
+
+    /// ditto
+    void invalidateArrange()
+    {
+        _arrangeDirty = true;
+    }
+
 protected:
+   /**
+    * Measures the content and reports the size it wants.  The default offers
+    * every child the whole of the available space and asks for the largest
+    * answer back -- a single-cell container, which is what an element with no
+    * layout of its own amounts to.  Panels override this.
+    */
+    Size measureOverride(Size availableSize)
+    {
+        Size desired;
+
+        foreach (child; _children)
+        {
+            child.measure(availableSize);
+
+            if (child._desiredSize.width > desired.width)
+                desired.width = child._desiredSize.width;
+            if (child._desiredSize.height > desired.height)
+                desired.height = child._desiredSize.height;
+        }
+
+        return desired;
+    }
+
+   /**
+    * Places the children and reports the size actually taken.  The default
+    * hands every child the whole rectangle, to match measureOverride.
+    */
+    Size arrangeOverride(Size finalSize)
+    {
+        foreach (child; _children)
+            child.arrange(Rect(0, 0, finalSize.width, finalSize.height));
+
+        return finalSize;
+    }
+
    /**
     * Draws this element's own content.  The default element draws nothing;
     * controls override this.
@@ -334,9 +580,73 @@ private:
         bool handledEventsToo;
     }
 
+    // Written only by the shared static constructor above.  Private because
+    // the key is the write permission for the actual size: publishing it would
+    // let anyone claim an element is a size it was never arranged at.
+    static immutable(ReadOnlyPropertyKey) actualWidthKey;
+    static immutable(ReadOnlyPropertyKey) actualHeightKey;
+
     Element              _parent;
     Element[]            _children;
     HandlerEntry[][uint] _handlers;
+    Size                 _desiredSize;
+    Rect                 _arrangedRect;
+    bool                 _measureDirty = true;
+    bool                 _arrangeDirty = true;
+}
+
+/**
+ * Carries the size an element had and the size it has now.
+ *
+ * Both are given because a handler almost always wants the difference: a
+ * renderer that scales, a scroll viewer that re-clamps its offset, a log that
+ * says what changed.  Recomputing it from the element alone is impossible --
+ * by the time the handler runs, the old size is gone.
+ */
+class SizeChangedEventArgs : RoutedEventArgs
+{
+    this(immutable(RoutedEvent) routedEvent, Size previousSize, Size newSize)
+    {
+        super(routedEvent);
+
+        _previousSize = previousSize;
+        _newSize = newSize;
+    }
+
+   /**
+    * The size the element was arranged at before this pass.
+    */
+    @property Size previousSize() const pure nothrow @nogc
+    {
+        return _previousSize;
+    }
+
+   /**
+    * The size it has been arranged at now.
+    */
+    @property Size newSize() const pure nothrow @nogc
+    {
+        return _newSize;
+    }
+
+   /**
+    * Whether that dimension is the one that changed.  An element that only
+    * grew taller raises the event with widthChanged false.
+    */
+    @property bool widthChanged() const pure nothrow @nogc
+    {
+        return _previousSize.width != _newSize.width;
+    }
+
+    /// ditto
+    @property bool heightChanged() const pure nothrow @nogc
+    {
+        return _previousSize.height != _newSize.height;
+    }
+
+private:
+    Size _previousSize;
+    Size _newSize;
 }
 
 /**
@@ -673,4 +983,155 @@ unittest
     renderLog = null;
     root.renderSubtree(new NullContext);
     assert(renderLog == ["root", "a", "c", "b"]);
+}
+
+unittest
+{
+    import std.math : isNaN;
+
+    // A size starts out unset.  "No width of my own" is a state rather than a
+    // number, and it is the one every element begins in.
+    auto element = new Element;
+
+    assert(!element.isWidthSet);
+    assert(!element.isHeightSet);
+    assert(element.width.isNaN, "an unset width reads as NaN at the boundary");
+    assert(element.getValue(Element.widthProperty).empty, "and as nothing at all in the store");
+
+    element.width = 120;
+    assert(element.isWidthSet);
+    assert(element.width == 120);
+
+    element.clearValue(Element.widthProperty);
+    assert(!element.isWidthSet, "clearing hands the decision back to the layout");
+    assert(element.width.isNaN);
+}
+
+unittest
+{
+    // Measure: an element with nothing in it asks for nothing, and a size of
+    // its own is a demand rather than a preference.
+    auto bare = new Element;
+    bare.measure(Size(500, 400));
+    assert(bare.desiredSize == Size(0, 0));
+
+    auto sized = new Element;
+    sized.width = 200;
+    sized.height = 100;
+    sized.measure(Size(500, 400));
+    assert(sized.desiredSize == Size(200, 100));
+
+    // Even one that does not fit: the parent is told what was asked for and
+    // decides for itself what to do about it.
+    sized.width = 900;
+    sized.measure(Size(500, 400));
+    assert(sized.desiredSize.width == 900);
+}
+
+unittest
+{
+    // What an element is measured against: its own size where it has one, and
+    // what the parent offered everywhere else.
+    static class Probe : Element
+    {
+        Size seenAvailable;
+
+        protected override Size measureOverride(Size availableSize)
+        {
+            seenAvailable = availableSize;
+            return Size(0, 0);
+        }
+    }
+
+    auto probe = new Probe;
+
+    probe.measure(Size(500, 400));
+    assert(probe.seenAvailable == Size(500, 400), "with no size of its own, all of it");
+
+    probe.width = 200;
+    probe.measure(Size(500, 400));
+    assert(probe.seenAvailable == Size(200, 400), "the width it demanded, the height it was offered");
+}
+
+unittest
+{
+    // An element with no layout of its own asks for as much as its largest
+    // child needs -- in each dimension separately, so two children can each
+    // decide one of them.
+    auto parent = new Element;
+    auto tall = new Element;
+    auto wide = new Element;
+
+    tall.width = 50;
+    tall.height = 300;
+    wide.width = 200;
+    wide.height = 80;
+
+    parent.addChild(tall);
+    parent.addChild(wide);
+    parent.measure(Size(1000, 1000));
+
+    assert(parent.desiredSize == Size(200, 300));
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+
+    // Arrange settles the actual size, and nothing else may: the key lives
+    // inside Element, so the property reads everywhere and writes nowhere.
+    auto element = new Element;
+    assert(element.actualWidth == 0 && element.actualHeight == 0);
+
+    element.arrange(Rect(10, 20, 300, 150));
+
+    assert(element.actualWidth == 300);
+    assert(element.actualHeight == 150);
+    assert(element.arrangedRect == Rect(10, 20, 300, 150));
+
+    assertThrown(element.setValue(Element.actualWidthProperty, Value(999.0f)));
+    assert(element.actualWidth == 300);
+}
+
+unittest
+{
+    // onSizeChanged reports a change, only a change, and only its own.
+    auto parent = new Element;
+    auto child = new Element;
+    parent.addChild(child);
+
+    int parentSeen;
+    int childSeen;
+    SizeChangedEventArgs last;
+
+    parent.onSizeChanged ~= (Element sender, RoutedEventArgs args) {
+        parentSeen++;
+        last = cast(SizeChangedEventArgs) args;
+    };
+    child.onSizeChanged ~= (Element sender, RoutedEventArgs args) { childSeen++; };
+
+    parent.arrange(Rect(0, 0, 200, 100));
+    assert(parentSeen == 1);
+    assert(last.previousSize == Size(0, 0));
+    assert(last.newSize == Size(200, 100));
+    assert(last.widthChanged && last.heightChanged);
+    assert(childSeen == 1, "the default arrange passes the whole rectangle down");
+
+    // The same size again is not news.
+    parent.arrange(Rect(0, 0, 200, 100));
+    assert(parentSeen == 1);
+    assert(childSeen == 1);
+
+    // One dimension moving is reported as one dimension moving.
+    parent.arrange(Rect(0, 0, 200, 130));
+    assert(parentSeen == 2);
+    assert(!last.widthChanged && last.heightChanged);
+    assert(last.previousSize == Size(200, 100) && last.newSize == Size(200, 130));
+
+    // And the event is direct: a child resizing is the child's business, so
+    // it does not travel up to a parent that did not resize.
+    auto parentBefore = parentSeen;
+    child.arrange(Rect(0, 0, 40, 40));
+    assert(childSeen == 3, "the two parent passes that moved it, and this one");
+    assert(parentSeen == parentBefore);
 }

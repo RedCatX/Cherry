@@ -42,20 +42,23 @@ class Window : Element
         titleMeta.onPropertyChanged ~= &titleChanged;
         titleProperty = Property.register("Title", getRtti!string(), getRtti!Window(), titleMeta);
 
+        // Width and Height belong to Element -- every element has a size, and
+        // a window is not the exception.  What differs is what the size means
+        // here: unset is no answer for something the OS must be handed a
+        // number for, and a change has to reach the native window.  Both of
+        // those are metadata, not grounds for a second pair of properties.
         PropertyMetadata widthMeta;
-        widthMeta.defaultValue = Value(800);
+        widthMeta.defaultValue = Value(600.0f);
         widthMeta.onPropertyChanged ~= &sizeChanged;
-        widthProperty = Property.register("Width", getRtti!int(), getRtti!Window(), widthMeta);
+        widthProperty.overrideMetadata(getRtti!Window(), widthMeta);
 
         PropertyMetadata heightMeta;
-        heightMeta.defaultValue = Value(600);
+        heightMeta.defaultValue = Value(400.0f);
         heightMeta.onPropertyChanged ~= &sizeChanged;
-        heightProperty = Property.register("Height", getRtti!int(), getRtti!Window(), heightMeta);
+        heightProperty.overrideMetadata(getRtti!Window(), heightMeta);
     }
 
     static immutable(Property) titleProperty;
-    static immutable(Property) widthProperty;
-    static immutable(Property) heightProperty;
 
     @property string title() const
     {
@@ -65,26 +68,6 @@ class Window : Element
     @property void title(string value)
     {
         setValue(titleProperty, Value(value));
-    }
-
-    @property int width() const
-    {
-        return getValue(widthProperty).get!int;
-    }
-
-    @property void width(int value)
-    {
-        setValue(widthProperty, Value(value));
-    }
-
-    @property int height() const
-    {
-        return getValue(heightProperty).get!int;
-    }
-
-    @property void height(int value)
-    {
-        setValue(heightProperty, Value(value));
     }
 
 	/**
@@ -136,8 +119,12 @@ class Window : Element
 
         // Push the effective (default or preset) values to the platform.
         _platform.setTitle(getValue(titleProperty).get!string);
-        _platform.setClientSize(getValue(widthProperty).get!int,
-                                getValue(heightProperty).get!int);
+        _platform.setClientSize(cast(int) width, cast(int) height);
+
+        // Lay the tree out once here, so an element added to a brand new
+        // window can be asked for its actualWidth without first waiting for
+        // whatever resize the platform happens to report.
+        performLayout(width, height);
 
         // Register new Window object in UIApplication
         if (UIApplication.instance !is null)
@@ -360,11 +347,30 @@ private:
 
         // Reflect the platform size into the properties without echoing it
         // back through the change callbacks.
-        _syncingFromPlatform = true;
-        scope (exit) _syncingFromPlatform = false;
+        //
+        // The window keeps Width and Height truthful instead of leaving them
+        // at whatever was asked for: the property system notifies only on a
+        // change, so a stale Width would turn re-assigning the original number
+        // into a silent no-op.
+        {
+            _syncingFromPlatform = true;
+            scope (exit) _syncingFromPlatform = false;
 
-        setValue(widthProperty, Value(width));
-        setValue(heightProperty, Value(height));
+            setValue(widthProperty, Value(cast(float) width));
+            setValue(heightProperty, Value(cast(float) height));
+        }
+
+        performLayout(cast(float) width, cast(float) height);
+    }
+
+   /*
+    * The window is the root of its tree: nothing above it dictates a size, so
+    * the space the platform granted is the space the layout works within.
+    */
+    void performLayout(float width, float height)
+    {
+        measure(Size(width, height));
+        arrange(Rect(0, 0, width, height));
     }
 
     static void titleChanged(const(Object) obj, const(Value) oldValue, const(Value) newValue)
@@ -384,8 +390,7 @@ private:
             || window._platform is null || window._destroyed)
             return;
 
-        window._platform.setClientSize(window.getValue(widthProperty).get!int,
-                                       window.getValue(heightProperty).get!int);
+        window._platform.setClientSize(cast(int) window.width, cast(int) window.height);
     }
 
     PlatformWindow _platform;
@@ -413,13 +418,13 @@ unittest
     });
 
     assert(platform.title == "Window");
-    assert(platform.width == 800 && platform.height == 600);
+    assert(platform.width == 600 && platform.height == 400);
 
     window.setValue(Window.titleProperty, Value("Hello"));
     assert(platform.title == "Hello");
 
-    window.setValue(Window.widthProperty, Value(1024));
-    assert(platform.width == 1024 && platform.height == 600);
+    window.setValue(Window.widthProperty, Value(1024.0f));
+    assert(platform.width == 1024 && platform.height == 400);
 
     window.show();
     assert(platform.visible);
@@ -454,10 +459,13 @@ unittest
     assert(rttiForName(typeid(window).name) is null,
            "the subclass registers nothing, so it has no RTTI of its own");
 
+    assert(platform.width == 600 && platform.height == 400,
+           "and still starts at Window's size, not at Element's unset default");
+
     window.setValue(Window.titleProperty, Value("Derived"));
     assert(platform.title == "Derived");
 
-    window.setValue(Window.widthProperty, Value(1024));
+    window.setValue(Window.widthProperty, Value(1024.0f));
     assert(platform.width == 1024);
 }
 
@@ -474,8 +482,8 @@ unittest
     auto pushesBefore = platform.sizePushes;
     platform.host.onResized(1024, 768);
 
-    assert(window.getValue(Window.widthProperty).get!int == 1024);
-    assert(window.getValue(Window.heightProperty).get!int == 768);
+    assert(window.getValue(Window.widthProperty).get!float == 1024);
+    assert(window.getValue(Window.heightProperty).get!float == 768);
     assert(platform.sizePushes == pushesBefore);   // no echo
 }
 

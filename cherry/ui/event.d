@@ -1,5 +1,18 @@
 module cherry.ui.event;
 
+/*
+ * This module and cherry.ui.element import each other -- an element routes
+ * events, and a routed event's accessor and args name the element.  Since
+ * element.d registers its layout properties from a `shared static this()`,
+ * this module must not have one: two module constructors in one import cycle
+ * abort the program before main() with a cyclic-dependency error that names
+ * neither the import nor the property behind it.
+ *
+ * Routed events declared here are built lazily through RoutedEventRegistry
+ * for exactly that reason.  Register events belonging to a concrete element
+ * from that element's own module, the way cherry.ui.input does.
+ */
+
 import cherry.core.multicast : EventAccessor, event;
 import cherry.core.rtti;
 import cherry.ui.element;
