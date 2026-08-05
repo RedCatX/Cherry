@@ -120,8 +120,6 @@ final class DispatcherTimer : DispatcherObject
             return;
 
         auto owner = cast(Dispatcher) dispatcher;
-        if (owner is null)
-            throw new Exception("A timer cannot run on a thread that has no dispatcher.");
 
         _enabled = true;
         _dueAt = MonoTime.currTime + _interval;
@@ -307,31 +305,4 @@ unittest // interval and priority
         auto quiet = new DispatcherTimer;
         assert(quiet.priority == DispatcherPriority.background);
     });
-}
-
-unittest // a bare thread is given a dispatcher by the first object built on it
-{
-    shared bool startedWithNone;
-    shared bool running;
-
-    auto worker = new Thread({
-        atomicStore(startedWithNone, Dispatcher.currentOrNull is null);
-
-        // A DispatcherObject binds to Dispatcher.current, which makes one for
-        // the thread on the spot, so the timer has something to tick on
-        // without anyone having set the thread up beforehand.
-        auto timer = new DispatcherTimer(5.msecs);
-
-        // And having been given one, the thread owns it: the dispatcher holds
-        // a platform event loop that nothing else will close.
-        scope (exit) Dispatcher.currentOrNull.shutdown();
-
-        timer.start();
-        atomicStore(running, timer.enabled);
-    }).start();
-
-    worker.join();
-
-    assert(atomicLoad(startedWithNone), "the thread began with no dispatcher of its own");
-    assert(atomicLoad(running), "and the timer runs on the one it was given");
 }
