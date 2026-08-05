@@ -115,6 +115,38 @@ class Rtti
     *         - "other" and the current Rtti instance represent the same type
     *         - ""
     */
+   /**
+    * Whether other describes the same type as this one, disregarding the
+    * qualifiers either was asked for.
+    *
+    * This is the question assignability wants: `immutable(Plain)` and `Plain`
+    * are one type, and whether a value of one may be put where the other is
+    * expected is decided separately, by what the value can reach.  isSameType
+    * stays exact -- Value equality is built on it, and two Values should not
+    * become equal because one of them forgot a promise.
+    *
+    * Both sides are compared through the instance describing them unqualified,
+    * which getRtti hands to the constructor.  A static array is canonicalised
+    * down to its elements, since immutable(float[4]) *is* immutable(float)[4];
+    * a slice is not, so string stays distinct from char[].
+    */
+    bool isSameUnqualifiedType(immutable(Rtti) other) pure const nothrow
+    {
+        if (other is null)
+            return false;
+
+        // A null link reads as "I am the unqualified one" -- a constructor
+        // cannot hand an object a reference to itself, and this saves the
+        // whole registry a self-reference apiece.
+        auto mine = _unqualified;
+        auto theirs = other._unqualified;
+
+        if (mine !is null)
+            return theirs !is null ? mine is theirs : mine is other;
+
+        return theirs !is null ? theirs is this : this is other;
+    }
+
     bool isSameType(immutable(Rtti) other) pure const nothrow
     {
         return (this is other) 
@@ -141,7 +173,7 @@ class Rtti
     @disable this();
 
     // Protected constructor, use getRtti to create instance of Rtti
-    protected immutable this(const string name, size_t size, const(void)* initPtr, Type type, Rtti.Qualifier qualifiers)
+    protected immutable this(const string name, size_t size, const(void)* initPtr, Type type, Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
         assert(name !is null);
 
@@ -150,6 +182,7 @@ class Rtti
         _initPtr = cast(immutable(void)*) initPtr;
         _type = type;
         _qualifiers = qualifiers;
+        _unqualified = unqualified;
     }
 
    /**
@@ -234,6 +267,11 @@ private:
     Type         _type;
     const(void)* _initPtr;
     Qualifier    _qualifiers;
+
+    // The instance describing this type with its qualifiers taken off, or
+    // null when this is that instance.  Filled in by getRtti, which is the
+    // only place that knows T.
+    immutable(Rtti) _unqualified;
 }
 
 class RttiIntegerType : Rtti
@@ -247,13 +285,14 @@ class RttiIntegerType : Rtti
         if (!other)
             return false;
 
-        // Same type check
-        if (isSameType(other))
-            return true;
-
-        // Qualifiers check
+        // Qualifiers first: one the destination cannot honour settles the
+        // question, whatever else the two types have in common.
         if (!canImplicitCastQualifiersToThis(other.qualifiers))
             return false;
+
+        // Then identity, with those qualifiers already accounted for.
+        if (isSameUnqualifiedType(other))
+            return true;
 
         if (other.type == Rtti.Type.Integer && other.size <= this.size)
             return true;
@@ -279,9 +318,9 @@ class RttiIntegerType : Rtti
     }
 
     // Protected constructor, use getRtti to create instance of RttiIntegerType
-    protected immutable this(const string name, size_t size, const(void)* initPtr, bool signed, Rtti.Qualifier qualifiers)
+    protected immutable this(const string name, size_t size, const(void)* initPtr, bool signed, Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
-        super(name, size, initPtr, Rtti.Type.Integer, qualifiers);
+        super(name, size, initPtr, Rtti.Type.Integer, qualifiers, unqualified);
         _signed = signed;
     }
 
@@ -299,13 +338,14 @@ class RttiFloatType : Rtti
         if (!other)
             return false;
 
-        // Same type check
-        if (isSameType(other))
-            return true;
-
-        // Qualifiers check
+        // Qualifiers first: one the destination cannot honour settles the
+        // question, whatever else the two types have in common.
         if (!canImplicitCastQualifiersToThis(other.qualifiers))
             return false;
+
+        // Then identity, with those qualifiers already accounted for.
+        if (isSameUnqualifiedType(other))
+            return true;
 
         if (other.type == Rtti.Type.Float && other.size <= this.size)
             return true;
@@ -327,9 +367,9 @@ class RttiFloatType : Rtti
     }
 
     // Protected constructor, use RttiFactory to create instance of RttiFloatType
-    protected immutable this(const string name, size_t size, const(void)* initPtr, Rtti.Qualifier qualifiers)
+    protected immutable this(const string name, size_t size, const(void)* initPtr, Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
-        super(name, size, initPtr, Rtti.Type.Float, qualifiers);
+        super(name, size, initPtr, Rtti.Type.Float, qualifiers, unqualified);
     }
 }
 
@@ -344,13 +384,14 @@ class RttiEnumType : Rtti
         if (!other)
             return false;
 
-        // Same type check
-        if (isSameType(other))
-            return true;
-
-        // Qualifiers check
+        // Qualifiers first: one the destination cannot honour settles the
+        // question, whatever else the two types have in common.
         if (!canImplicitCastQualifiersToThis(other.qualifiers))
             return false;
+
+        // Then identity, with those qualifiers already accounted for.
+        if (isSameUnqualifiedType(other))
+            return true;
 
         return false;
     }
@@ -377,9 +418,9 @@ class RttiEnumType : Rtti
 
 protected:
     // Protected constructor, use getRtti to create instance of RttiEnumType
-    immutable this(const string name, const(void)* initPtr, immutable(Rtti) innerType, immutable(EnumValues) enumValues, Rtti.Qualifier qualifiers)
+    immutable this(const string name, const(void)* initPtr, immutable(Rtti) innerType, immutable(EnumValues) enumValues, Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
-        super(name, innerType.size, initPtr, Rtti.Type.Enum, qualifiers);
+        super(name, innerType.size, initPtr, Rtti.Type.Enum, qualifiers, unqualified);
 
         _innerType = innerType;
         _enumValues = enumValues;
@@ -413,21 +454,28 @@ class RttiArrayType : Rtti
         if (!other)
             return false;
 
-        // Same type check
-        if (isSameType(other))
-            return true;
-
+        // Null goes wherever a handle goes -- but a static array is not a
+        // handle, it is the elements themselves.
         if (type != Rtti.Type.StaticArray && other.type == Rtti.Type.Null)
             return true;
 
-        // Qualifiers check
+        // Qualifiers first: one the destination cannot honour settles the
+        // question, whatever else the two types have in common.
         if (!canImplicitCastQualifiersToThis(other.qualifiers))
             return false;
+
+        // Then identity, with those qualifiers already accounted for.
+        if (isSameUnqualifiedType(other))
+            return true;
 
         if (type == Rtti.Type.StaticArray && other.size != size)
             return false;
 
-        return other.type == this.type && (cast(immutable(RttiArrayType))(other)).elementType is elementType;
+        // isSameType and not `is`: reference identity holds only for types
+        // that went through getRtti's memoization, and it would quietly answer
+        // false for any that did not.
+        return other.type == this.type
+            && (cast(immutable(RttiArrayType))(other)).elementType.isSameType(elementType);
     }
 
     override bool isSameType(immutable(Rtti) other) pure const nothrow
@@ -447,13 +495,13 @@ class RttiArrayType : Rtti
 							 const(void)* initPtr, 
                              Rtti.Type type, 
                              immutable(Rtti) elementType, 
-                             Rtti.Qualifier qualifiers)
+                             Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
         assert(type == Rtti.Type.StaticArray ||
                type == Rtti.Type.DynamicArray ||
                type == Rtti.Type.AssociativeArray);
 
-        super(name, size, initPtr, type, qualifiers);
+        super(name, size, initPtr, type, qualifiers, unqualified);
         _elementType = elementType;
     }
 
@@ -485,9 +533,9 @@ class RttiAssociativeArrayType : RttiArrayType
 							 const(void)* initPtr, 
                              immutable(Rtti) elementType, 
                              immutable(Rtti) keyType, 
-                             Rtti.Qualifier qualifiers)
+                             Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
-        super(name, size, initPtr, Rtti.Type.AssociativeArray, elementType, qualifiers);
+        super(name, size, initPtr, Rtti.Type.AssociativeArray, elementType, qualifiers, unqualified);
         _keyType = keyType;
     }
 
@@ -578,11 +626,11 @@ class RttiFunctionType : Rtti
                              bool hasContextPointer, 
                              immutable(Rtti) returnType, 
                              immutable(Rtti)[] parameters, 
-                             Rtti.Qualifier qualifiers)
+                             Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
         assert(returnType);
 
-        super(name, size, initPtr, Rtti.Type.Function, qualifiers);
+        super(name, size, initPtr, Rtti.Type.Function, qualifiers, unqualified);
         _hasContextPtr = hasContextPointer;
         _parameters = parameters;
         _returnType = returnType;
@@ -601,17 +649,19 @@ class RttiClassType : Rtti
         if (!other)
             return false;
 
-        // Same type check
-        if (isSameType(other))
-            return true;
-
-        // Null type check
+        // Null goes wherever a reference goes, whatever the destination
+        // promises about the other end of it.
         if (other.type == Rtti.Type.Null)
             return true;
 
-        // Qualifiers check
+        // Qualifiers first: one the destination cannot honour settles the
+        // question, whatever else the two types have in common.
         if (!canImplicitCastQualifiersToThis(other.qualifiers))
             return false;
+
+        // Then identity, with those qualifiers already accounted for.
+        if (isSameUnqualifiedType(other))
+            return true;
 
         return other.type == Rtti.Type.Class && isBaseOf(cast(immutable(RttiClassType)) other);
     }
@@ -674,9 +724,9 @@ class RttiClassType : Rtti
                              immutable(RttiClassType) baseClass,
                              bool isInterface,
                              immutable(string[]) eventNames,
-                             Rtti.Qualifier qualifiers)
+                             Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
-        super(name, size, initPtr, Rtti.Type.Class, qualifiers);
+        super(name, size, initPtr, Rtti.Type.Class, qualifiers, unqualified);
         _baseTypes = baseTypes;
         _baseClass = baseClass;
         _isInterface = isInterface;
@@ -701,13 +751,14 @@ class RttiStructType : Rtti
         if (!other)
             return false;
 
-        // Same type check
-        if (isSameType(other))
-            return true;
-
-        // Qualifiers check
+        // Qualifiers first: one the destination cannot honour settles the
+        // question, whatever else the two types have in common.
         if (!canImplicitCastQualifiersToThis(other.qualifiers))
             return false;
+
+        // Then identity, with those qualifiers already accounted for.
+        if (isSameUnqualifiedType(other))
+            return true;
 
         return other.type == Rtti.Type.Struct 
             && other.name == name
@@ -723,9 +774,9 @@ class RttiStructType : Rtti
                              size_t size, 
 							 const(void)* initPtr, 
                              bool hasIndirections,
-                             Rtti.Qualifier qualifiers)
+                             Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
-        super(name, size, initPtr, Rtti.Type.Struct, qualifiers);
+        super(name, size, initPtr, Rtti.Type.Struct, qualifiers, unqualified);
         _hasIndirections = hasIndirections;
     }
 
@@ -741,17 +792,19 @@ class RttiPointerType : Rtti
         if (!other)
             return false;
 
-        // Same type check
-        if (this is other)
-            return true;
-
-        // Null type check
+        // Null goes wherever a reference goes, whatever the destination
+        // promises about the other end of it.
         if (other.type == Rtti.Type.Null)
             return true;
 
-        // Qualifiers check
+        // Qualifiers first: one the destination cannot honour settles the
+        // question, whatever else the two types have in common.
         if (!canImplicitCastQualifiersToThis(other.qualifiers))
             return false;
+
+        // Then identity, with those qualifiers already accounted for.
+        if (isSameUnqualifiedType(other))
+            return true;
 
         return other.type == Rtti.Type.Pointer && (cast(immutable(RttiPointerType)) other).base.isAssignableFrom(base);
     }
@@ -765,9 +818,9 @@ class RttiPointerType : Rtti
                              size_t size, 
 							 const(void)* initPtr, 
                              immutable(Rtti) base, 
-                             Rtti.Qualifier qualifiers)
+                             Rtti.Qualifier qualifiers, immutable(Rtti) unqualified = null)
     {
-        super(name, size, initPtr, Rtti.Type.Pointer, qualifiers);
+        super(name, size, initPtr, Rtti.Type.Pointer, qualifiers, unqualified);
         _base = base;
     }
 
@@ -817,6 +870,20 @@ template Unqualified(T)
         alias Unqualified = Unqualified!U[N];
     else
         alias Unqualified = Unqual!T;
+}
+
+/*
+ * The instance describing T without the qualifiers it was asked for, or null
+ * when T carries none and is therefore that instance itself.  Returning null
+ * for the unqualified case is also what stops this recursing: getRtti!T would
+ * otherwise re-enter itself while its own instance is still being built.
+ */
+private immutable(Rtti) canonicalOf(T)()
+{
+    static if (is(T == Unqualified!T))
+        return null;
+    else
+        return getRtti!(Unqualified!T)();
 }
 
 /**
@@ -935,15 +1002,15 @@ private auto makeRtti(T)()
 										   typeid(T).initializer.ptr, 
 										   base, 
 										   cast(immutable(RttiEnumType.EnumValues)) *eValues, 
-										   qualifiers);
+										   qualifiers, canonicalOf!T());
     }
     else static if (__traits(isIntegral, T))
     {
-        return new immutable(RttiIntegerType)(fullyQualifiedName!T, T.sizeof, typeid(T).initializer.ptr, isSigned!T, qualifiers);
+        return new immutable(RttiIntegerType)(fullyQualifiedName!T, T.sizeof, typeid(T).initializer.ptr, isSigned!T, qualifiers, canonicalOf!T());
     }
     else static if (__traits(isFloating, T))
     {
-        return new immutable(RttiFloatType)(fullyQualifiedName!T, T.sizeof, typeid(T).initializer.ptr, qualifiers);
+        return new immutable(RttiFloatType)(fullyQualifiedName!T, T.sizeof, typeid(T).initializer.ptr, qualifiers, canonicalOf!T());
     }
     else static if (__traits(isStaticArray, T))
     {
@@ -953,7 +1020,7 @@ private auto makeRtti(T)()
 											typeid(T).initializer.ptr, 
 											Rtti.Type.StaticArray, 
 											elementType, 
-											qualifiers);
+											qualifiers, canonicalOf!T());
     }
     else static if (isDynamicArray!T)
     {
@@ -963,7 +1030,7 @@ private auto makeRtti(T)()
 											typeid(T).initializer.ptr, 
 											Rtti.Type.DynamicArray, 
 											elementType, 
-											qualifiers);
+											qualifiers, canonicalOf!T());
     }
     else static if (is(T == U[K], U, K))
     {
@@ -974,7 +1041,7 @@ private auto makeRtti(T)()
 													   typeid(T).initializer.ptr, 
 													   elementType, 
 													   keyType, 
-													   qualifiers);
+													   qualifiers, canonicalOf!T());
     }
     else static if (is(T == class) || is(T == interface))
     {
@@ -1018,7 +1085,7 @@ private auto makeRtti(T)()
 											cast(immutable(RttiClassType)) baseClass, 
 											is(T == interface), 
 												cast(immutable(string[])) eventNames, 
-											qualifiers);
+											qualifiers, canonicalOf!T());
     }
     else static if (is(T == struct))
     {
@@ -1026,7 +1093,7 @@ private auto makeRtti(T)()
 											 T.sizeof, 
 											 typeid(T).initializer.ptr, 
 											 hasIndirections!T,
-											 qualifiers);
+											 qualifiers, canonicalOf!T());
     }
     else static if (isSomeFunction!T)
     {
@@ -1057,7 +1124,7 @@ private auto makeRtti(T)()
 											   isDelegate!T, 
 											   rType, 
 											   parameters, 
-											   qualifiers);
+											   qualifiers, canonicalOf!T());
     }
     else static if (isPointer!T)
     {
@@ -1066,7 +1133,7 @@ private auto makeRtti(T)()
 											  T.sizeof, 
 											  typeid(T).initializer.ptr, 
 											  baseType, 
-											  qualifiers);
+											  qualifiers, canonicalOf!T());
     }
     else
         static assert(false, "Unknown type: " ~ fullyQualifiedName!T);
@@ -1331,6 +1398,13 @@ unittest
     // An enum is as reachable as the type behind it.
     assert(getRtti!int.isAssignableFrom(getRtti!(immutable Corner)));
 
+    // A struct of such fields is copied whole, and a static array is its
+    // elements, so both answer the same way now that identity disregards the
+    // qualifier the type was asked for.
+    static struct Plain { float x; float y; }
+    assert(getRtti!Plain.isAssignableFrom(getRtti!(immutable Plain)));
+    assert(getRtti!(float[4]).isAssignableFrom(getRtti!(immutable(float[4]))));
+
     // A slice is a handle on elements kept elsewhere, and immutability is a
     // promise about those elements, so it has to hold.
     assert(!getRtti!(int[]).isAssignableFrom(getRtti!(immutable(int[]))));
@@ -1340,5 +1414,37 @@ unittest
     // Same for a class reference: two names for one object, and one of them
     // would be promising something the other could break.
     static class Node { }
+    assert(!getRtti!Node.isAssignableFrom(getRtti!(immutable Node)));
+}
+
+unittest
+{
+    static struct Plain { float x; }
+    static class Node { }
+
+    // Identity disregards the qualifier a type was asked for...
+    assert(getRtti!Plain.isSameUnqualifiedType(getRtti!(immutable Plain)));
+    assert(getRtti!float.isSameUnqualifiedType(getRtti!(const float)));
+    assert(getRtti!Node.isSameUnqualifiedType(getRtti!(immutable Node)));
+    assert(getRtti!(float[4]).isSameUnqualifiedType(getRtti!(immutable(float[4]))));
+
+    // ...and isSameType does not, deliberately: Value equality rests on it,
+    // and two values should not become equal by forgetting a promise.
+    assert(!getRtti!Plain.isSameType(getRtti!(immutable Plain)));
+    assert(!getRtti!float.isSameType(getRtti!(const float)));
+
+    // Different types stay different under either question.
+    assert(!getRtti!float.isSameUnqualifiedType(getRtti!double));
+    assert(!getRtti!int.isSameUnqualifiedType(getRtti!uint));
+
+    // A slice is not canonicalised through its elements, so string keeps its
+    // distance from char[].  This is the case that stops the qualifier being
+    // dropped when the Rtti is built, rather than when it is compared.
+    assert(!getRtti!string.isSameUnqualifiedType(getRtti!(char[])));
+    assert(!getRtti!string.isAssignableFrom(getRtti!(char[])));
+
+    // Being the same type is not being assignable: a class reference reaches
+    // further than itself, so the qualifier still has to be honoured.
+    assert(getRtti!Node.isSameUnqualifiedType(getRtti!(immutable Node)));
     assert(!getRtti!Node.isAssignableFrom(getRtti!(immutable Node)));
 }
