@@ -33,6 +33,90 @@ import cherry.ui.window : Window;
 public import cherry.core.application;
 public import cherry.platform.window : SessionEndReason;
 
+public import cherry.platform.entrypoint;
+
+/*
+ * Calls an application's main in whichever of the four shapes it was written
+ * -- with or without arguments, returning void or an int -- and reports an
+ * exit code either way.  These are the same shapes D itself accepts for main.
+ *
+ * Public because it has to be: a mixin template is instantiated in the scope
+ * that mixes it in, so every symbol its body names must be visible from there.
+ * Nobody writes this name; ApplicationEntryPoint writes it for them.
+ */
+int normalizeMainCall(alias mainFn)(string[] args)
+{
+    static if (is(typeof(mainFn(args))))
+    {
+        static if (is(typeof(mainFn(args)) == void))
+        { 
+            mainFn(args); 
+            return 0; 
+        }
+        else
+            return cast(int) mainFn(args);
+    }
+    else static if (is(typeof(mainFn())))
+    {
+        static if (is(typeof(mainFn()) == void))
+        { 
+            mainFn(); 
+            return 0; 
+        }
+        else
+            return cast(int) mainFn();
+    }
+    else static assert(0, "App.main must be a function that takes no parameters or a string array and returns void or an int");
+}
+
+/**
+ * Makes AppT the entry point of the program.
+ *
+ * Mixed into the module that owns the program's start-up, this supplies
+ * whatever entry point the platform expects -- WinMain on Windows, so no
+ * console window is created -- and routes it to AppT.main.  AppT must derive
+ * from UIApplication and declare a static main taking a string array or
+ * nothing, returning an int or nothing.
+ *
+ * Mix it in exactly once.  A second one is a second WinMain, which the linker
+ * reports as a duplicate symbol without a word about where either came from.
+ *
+ * Example:
+ * ---
+ * mixin ApplicationEntryPoint!MyApp;
+ *
+ * class MyApp : UIApplication
+ * {
+ *     this(string[] args)
+ *     {
+ *         super(args);
+ *     }
+ *
+ *     static int main(string[] args)
+ *     {
+ *         auto app = new MyApp(args);
+ *         return app.run(new MainWindow);
+ *     }
+ * }
+ * ---
+ */
+mixin template ApplicationEntryPoint(AppT)
+{
+    // Asserted rather than constrained: a template constraint that fails says
+    // only that the template could not be mixed in, which is true and useless.
+    static assert(is(AppT : UIApplication),
+                  AppT.stringof ~ " must derive from UIApplication to be an application entry point.");
+    static assert(__traits(hasMember, AppT, "main"),
+                  AppT.stringof ~ " must declare a static main().");
+
+    private static int _cherryStart(string[] args)
+    {
+        return normalizeMainCall!(AppT.main)(args);
+    }
+
+    mixin PlatformEntryPoint!_cherryStart;
+}
+
 /**
  * Decides what a closing window means for the application as a whole.  An
  * application is not necessarily over just because its windows are gone, and
@@ -296,14 +380,14 @@ class UIApplication : Application
         verifyAccess();
 
         if (!_shutdownStarted) 
-		{
+        {
             _shutdownStarted = true;
 
             foreach (w; windows)
                 w.forceClose();
 
             super.shutdown(exitCode);
-		}
+        }
     }
 
 package(cherry):
