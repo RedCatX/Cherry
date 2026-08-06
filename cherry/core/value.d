@@ -165,8 +165,21 @@ struct Value
         }
     }
 
-    @property immutable(Rtti) typeinfo() pure const nothrow
+   /**
+    * The type of the stored value.
+    *
+    * A Value that never had anything stored in it holds a null `_typeinfo`,
+    * which reads as void here.  The empty state must not be spelled out as a
+    * field initialiser: `getRtti!void` would then be evaluated during CTFE and
+    * the resulting Rtti instance emitted into `Value.init` as a compiler-named
+    * static literal, which the linker cannot share between object modules.
+    * See the note above `_typeinfo`.
+    */
+    @property immutable(Rtti) typeinfo() const
     {
+        if (_typeinfo is null)
+            return getRtti!void;
+
         return cast(immutable(Rtti)) _typeinfo;
     }
 
@@ -186,7 +199,7 @@ struct Value
     */
     @property void* ptr()
     {
-        if (_typeinfo.size <= _value.sizeof)
+        if (typeinfo.size <= _value.sizeof)
             return &_value;
         else
             return _value.heap.ptr;
@@ -197,7 +210,7 @@ struct Value
     */
     void clear()
     {
-        _typeinfo = cast(Rtti) getRtti!void;
+        _typeinfo = null;
         _value = _value.init;
     }
 
@@ -311,7 +324,7 @@ struct Value
     {
         import core.internal.hash : hashOf;
 
-        final switch (_typeinfo.type)
+        final switch (typeinfo.type)
         {
             case Rtti.Type.Null:
             case Rtti.Type.Void:
@@ -332,7 +345,7 @@ struct Value
                 return hashOf(cast(double) normalizeFloat(readFloat()));
 
             case Rtti.Type.StaticArray:
-                return hashOf((cast(const(ubyte)[]) _value.heap)[0 .. _typeinfo.size]);
+                return hashOf((cast(const(ubyte)[]) _value.heap)[0 .. typeinfo.size]);
 
             case Rtti.Type.DynamicArray:
                 return hashOf(arrayBytes());
@@ -346,7 +359,18 @@ struct Value
         }
     }
 private:
-    Rtti _typeinfo = cast(Rtti)(getRtti!void);
+   /*
+    * Null means void -- an empty Value.  It is deliberately not initialised to
+    * `getRtti!void` here: a field initialiser is evaluated during CTFE, and the
+    * Rtti instance CTFE builds would be baked into `Value.init` as static data
+    * under a compiler-chosen name with internal linkage.  Every object module
+    * that needs `Value.init` then refers to that name while only one module
+    * defines it, and not for export -- which is what made linking against a
+    * cherry static library fail with `LNK2001: unresolved external symbol
+    * internal`.  Reading the type through `typeinfo` also means an empty Value
+    * shares the one memoised void Rtti instead of carrying a CTFE-made copy.
+    */
+    Rtti _typeinfo;
     ValueStorage _value;
 
    /*
@@ -355,7 +379,7 @@ private:
     */
     const(ubyte)[] rawBytes() const return
     {
-        immutable sz = _typeinfo.size;
+        immutable sz = typeinfo.size;
         if (sz <= _value.data.length)
             return _value.data[0 .. sz];
         return (cast(const(ubyte)[]) _value.heap)[0 .. sz];
@@ -374,7 +398,7 @@ private:
     long readSigned() const
     {
         auto p = rawBytes().ptr;
-        switch (_typeinfo.size)
+        switch (typeinfo.size)
         {
             case 1:  return *cast(const(byte)*) p;
             case 2:  return *cast(const(short)*) p;
@@ -387,7 +411,7 @@ private:
     ulong readUnsigned() const
     {
         auto p = rawBytes().ptr;
-        switch (_typeinfo.size)
+        switch (typeinfo.size)
         {
             case 1:  return *cast(const(ubyte)*) p;
             case 2:  return *cast(const(ushort)*) p;
@@ -405,7 +429,7 @@ private:
     real readFloat() const
     {
         auto p = rawBytes().ptr;
-        switch (_typeinfo.size)
+        switch (typeinfo.size)
         {
             case 4:  return *cast(const(float)*) p;
             case 8:  return *cast(const(double)*) p;
@@ -472,7 +496,7 @@ private:
         if (!typeinfo.isSameType(other.typeinfo))
             return false;
 
-        final switch (_typeinfo.type)
+        final switch (typeinfo.type)
         {
             case Rtti.Type.Null:
             case Rtti.Type.Void:
@@ -489,8 +513,8 @@ private:
                 return floatEquals(readFloat(), other.readFloat());
 
             case Rtti.Type.StaticArray:
-                return (cast(const(ubyte)[]) _value.heap)[0 .. _typeinfo.size]
-                    == (cast(const(ubyte)[]) other._value.heap)[0 .. other._typeinfo.size];
+                return (cast(const(ubyte)[]) _value.heap)[0 .. typeinfo.size]
+                    == (cast(const(ubyte)[]) other._value.heap)[0 .. other.typeinfo.size];
 
             case Rtti.Type.DynamicArray:
                 return arrayBytes() == other.arrayBytes();
@@ -517,7 +541,7 @@ private:
         if (!typeinfo.isSameType(other.typeinfo))
             throw new ValueTypeMismatchException(typeinfo, other.typeinfo);
 
-        switch (_typeinfo.type)
+        switch (typeinfo.type)
         {
             case Rtti.Type.Integer:
                 if ((cast(immutable(RttiIntegerType)) typeinfo).signed)
