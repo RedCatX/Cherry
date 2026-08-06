@@ -1,6 +1,7 @@
 module cherry.platform;
 
 public import cherry.platform.dialog;
+public import cherry.platform.entrypoint;
 public import cherry.platform.eventloop;
 public import cherry.platform.render;
 public import cherry.platform.window;
