@@ -1,9 +1,9 @@
 <DProject>
- <ProjectGuid>{08E13649-26CA-405F-8743-FE83BD1D0672}</ProjectGuid>
+ <ProjectGuid>{119BD517-2C7A-4183-9C84-EC5D5E66D68F}</ProjectGuid>
  <Config platform="Win32" name="Debug">
   <obj>0</obj>
   <link>0</link>
-  <lib>1</lib>
+  <lib>0</lib>
   <subsystem>2</subsystem>
   <multiobj>0</multiobj>
   <singleFileCompilation>0</singleFileCompilation>
@@ -37,7 +37,7 @@
   <useUnitTests>0</useUnitTests>
   <useInline>0</useInline>
   <release>0</release>
-  <preservePaths>1</preservePaths>
+  <preservePaths>0</preservePaths>
   <warnings>0</warnings>
   <infowarnings>0</infowarnings>
   <genStackFrame>0</genStackFrame>
@@ -70,9 +70,9 @@
   <otherDMD>0</otherDMD>
   <cccmd>$(CC) -c</cccmd>
   <ccTransOpt>1</ccTransOpt>
-  <addDepImp>0</addDepImp>
+  <addDepImp>1</addDepImp>
   <program>$(DMDInstallDir)windows\bin\dmd.exe</program>
-  <imppath />
+  <imppath>..\..\..\Cherry</imppath>
   <fileImppath />
   <outdir>$(PlatformName)\$(ConfigurationName)</outdir>
   <objdir>$(OutDir)</objdir>
@@ -114,7 +114,7 @@
   <libpaths />
   <deffile />
   <resfile />
-  <exefile>$(OutDir)\$(ProjectName).lib</exefile>
+  <exefile>$(OutDir)\$(ProjectName).exe</exefile>
   <pdbfile>$(IntDir)\$(SafeProjectName).pdb</pdbfile>
   <impfile>$(IntDir)\$(SafeProjectName).lib</impfile>
   <mapfile>$(IntDir)\$(SafeProjectName).map</mapfile>
@@ -129,7 +129,7 @@
  <Config platform="Win32" name="Release">
   <obj>0</obj>
   <link>0</link>
-  <lib>1</lib>
+  <lib>0</lib>
   <subsystem>2</subsystem>
   <multiobj>0</multiobj>
   <singleFileCompilation>0</singleFileCompilation>
@@ -163,7 +163,7 @@
   <useUnitTests>0</useUnitTests>
   <useInline>1</useInline>
   <release>1</release>
-  <preservePaths>1</preservePaths>
+  <preservePaths>0</preservePaths>
   <warnings>0</warnings>
   <infowarnings>0</infowarnings>
   <genStackFrame>0</genStackFrame>
@@ -196,9 +196,9 @@
   <otherDMD>0</otherDMD>
   <cccmd>$(CC) -c</cccmd>
   <ccTransOpt>1</ccTransOpt>
-  <addDepImp>0</addDepImp>
+  <addDepImp>1</addDepImp>
   <program>$(DMDInstallDir)windows\bin\dmd.exe</program>
-  <imppath />
+  <imppath>..\..\..\Cherry</imppath>
   <fileImppath />
   <outdir>$(PlatformName)\$(ConfigurationName)</outdir>
   <objdir>$(OutDir)</objdir>
@@ -240,7 +240,7 @@
   <libpaths />
   <deffile />
   <resfile />
-  <exefile>$(OutDir)\$(ProjectName).lib</exefile>
+  <exefile>$(OutDir)\$(ProjectName).exe</exefile>
   <pdbfile>$(IntDir)\$(SafeProjectName).pdb</pdbfile>
   <impfile>$(IntDir)\$(SafeProjectName).lib</impfile>
   <mapfile>$(IntDir)\$(SafeProjectName).map</mapfile>
@@ -255,7 +255,7 @@
  <Config platform="x64" name="Debug">
   <obj>0</obj>
   <link>0</link>
-  <lib>1</lib>
+  <lib>0</lib>
   <subsystem>2</subsystem>
   <multiobj>0</multiobj>
   <singleFileCompilation>0</singleFileCompilation>
@@ -267,7 +267,7 @@
   <vtls>0</vtls>
   <vgc>0</vgc>
   <symdebug>1</symdebug>
-  <symdebugref>0</symdebugref>
+  <symdebugref>1</symdebugref>
   <optimize>0</optimize>
   <cpu>0</cpu>
   <isX86_64>1</isX86_64>
@@ -289,7 +289,7 @@
   <useUnitTests>0</useUnitTests>
   <useInline>0</useInline>
   <release>0</release>
-  <preservePaths>1</preservePaths>
+  <preservePaths>0</preservePaths>
   <warnings>0</warnings>
   <infowarnings>0</infowarnings>
   <genStackFrame>0</genStackFrame>
@@ -297,7 +297,7 @@
   <cov>0</cov>
   <nofloat>0</nofloat>
   <ignoreUnsupportedPragmas>0</ignoreUnsupportedPragmas>
-  <allinst>1</allinst>
+  <allinst>0</allinst>
   <stackStomp>0</stackStomp>
   <betterC>0</betterC>
   <dip25>0</dip25>
@@ -322,9 +322,9 @@
   <otherDMD>0</otherDMD>
   <cccmd>$(CC) -c</cccmd>
   <ccTransOpt>1</ccTransOpt>
-  <addDepImp>0</addDepImp>
+  <addDepImp>1</addDepImp>
   <program>$(DMDInstallDir)windows\bin\dmd.exe</program>
-  <imppath />
+  <imppath>..\..\..\Cherry</imppath>
   <fileImppath />
   <outdir>$(PlatformName)\$(ConfigurationName)</outdir>
   <objdir>$(OutDir)</objdir>
@@ -362,11 +362,11 @@
   <mixinPath>$(IntDir)\$(SafeProjectName).mixin</mixinPath>
   <objfiles />
   <linkswitches />
-  <libfiles />
+  <libfiles>..\..\x64\Debug\cherry.lib</libfiles>
   <libpaths />
   <deffile />
   <resfile />
-  <exefile>$(OutDir)\$(ProjectName).lib</exefile>
+  <exefile>$(OutDir)\$(ProjectName).exe</exefile>
   <pdbfile>$(IntDir)\$(SafeProjectName).pdb</pdbfile>
   <impfile>$(IntDir)\$(SafeProjectName).lib</impfile>
   <mapfile>$(IntDir)\$(SafeProjectName).map</mapfile>
@@ -381,7 +381,7 @@
  <Config platform="x64" name="Release">
   <obj>0</obj>
   <link>0</link>
-  <lib>1</lib>
+  <lib>0</lib>
   <subsystem>2</subsystem>
   <multiobj>0</multiobj>
   <singleFileCompilation>0</singleFileCompilation>
@@ -415,7 +415,7 @@
   <useUnitTests>0</useUnitTests>
   <useInline>1</useInline>
   <release>1</release>
-  <preservePaths>1</preservePaths>
+  <preservePaths>0</preservePaths>
   <warnings>0</warnings>
   <infowarnings>0</infowarnings>
   <genStackFrame>0</genStackFrame>
@@ -448,9 +448,9 @@
   <otherDMD>0</otherDMD>
   <cccmd>$(CC) -c</cccmd>
   <ccTransOpt>1</ccTransOpt>
-  <addDepImp>0</addDepImp>
+  <addDepImp>1</addDepImp>
   <program>$(DMDInstallDir)windows\bin\dmd.exe</program>
-  <imppath />
+  <imppath>..\..\..\Cherry</imppath>
   <fileImppath />
   <outdir>$(PlatformName)\$(ConfigurationName)</outdir>
   <objdir>$(OutDir)</objdir>
@@ -492,7 +492,7 @@
   <libpaths />
   <deffile />
   <resfile />
-  <exefile>$(OutDir)\$(ProjectName).lib</exefile>
+  <exefile>$(OutDir)\$(ProjectName).exe</exefile>
   <pdbfile>$(IntDir)\$(SafeProjectName).pdb</pdbfile>
   <impfile>$(IntDir)\$(SafeProjectName).lib</impfile>
   <mapfile>$(IntDir)\$(SafeProjectName).map</mapfile>
@@ -504,53 +504,9 @@
   <postBuildCommand />
   <filesToClean>*.obj;*.cmd;*.build;*.json;*.dep;*.tlog</filesToClean>
  </Config>
- <Folder name="cherry">
-  <Folder name="cherry">
-   <Folder name="core">
-    <Folder name="dispatcher">
-     <File path="cherry\core\dispatcher\dispatcher.d" />
-     <File path="cherry\core\dispatcher\frame.d" />
-     <File path="cherry\core\dispatcher\operation.d" />
-     <File path="cherry\core\dispatcher\package.d" />
-     <File path="cherry\core\dispatcher\queue.d" />
-     <File path="cherry\core\dispatcher\testing.d" />
-     <File path="cherry\core\dispatcher\timer.d" />
-     <File path="cherry\core\dispatcher\types.d" />
-    </Folder>
-    <File path="cherry\core\application.d" />
-    <File path="cherry\core\juice.d" />
-    <File path="cherry\core\multicast.d" />
-    <File path="cherry\core\obj.d" />
-    <File path="cherry\core\obj_test.d" />
-    <File path="cherry\core\package.d" />
-    <File path="cherry\core\property.d" />
-    <File path="cherry\core\rtti.d" />
-    <File path="cherry\core\value.d" />
-   </Folder>
-   <Folder name="platform">
-    <Folder name="win32">
-     <File path="cherry\platform\win32\d2d1.d" />
-     <File path="cherry\platform\win32\dialog.d" />
-     <File path="cherry\platform\win32\entrypoint.d" />
-     <File path="cherry\platform\win32\eventloop.d" />
-     <File path="cherry\platform\win32\render.d" />
-     <File path="cherry\platform\win32\window.d" />
-    </Folder>
-    <File path="cherry\platform\dialog.d" />
-    <File path="cherry\platform\entrypoint.d" />
-    <File path="cherry\platform\eventloop.d" />
-    <File path="cherry\platform\package.d" />
-    <File path="cherry\platform\render.d" />
-    <File path="cherry\platform\window.d" />
-   </Folder>
-   <Folder name="ui">
-    <File path="cherry\ui\application.d" />
-    <File path="cherry\ui\element.d" />
-    <File path="cherry\ui\event.d" />
-    <File path="cherry\ui\input.d" />
-    <File path="cherry\ui\package.d" />
-    <File path="cherry\ui\window.d" />
-   </Folder>
-  </Folder>
+ <Folder name="simpleapp">
+  <File path="mainwin.d" />
+  <File path="mainwin.juice" />
+  <File path="simpleapp.d" />
  </Folder>
 </DProject>
