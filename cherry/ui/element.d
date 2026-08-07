@@ -705,11 +705,12 @@ class Element : CherryObject
         // well and measure() never clears it, so _measureDirty implies
         // _arrangeDirty always holds: an element whose measure went stale
         // cannot slip out of arrange at the rectangle it already had.
-        if (!_arrangeDirty && finalRect == _arrangedRect)
+        if (!_arrangeDirty && finalRect == _arrangeSlot)
             return;
 
         immutable previous = Size(actualWidth, actualHeight);
 
+        _arrangeSlot = finalRect;
         _arrangedRect = finalRect;
         immutable arranged = arrangeOverride(Size(finalRect.width, finalRect.height));
 
@@ -858,7 +859,7 @@ class Element : CherryObject
     /// ditto
     void arrangeAsRoot()
     {
-        arrange(_arrangedRect);
+        arrange(_arrangeSlot);
     }
 
 protected:
@@ -1075,6 +1076,13 @@ private:
     // before Width and Height are laid over it, since that is what the next
     // caller's availableSize gets compared against.
     Size                 _previousConstraint;
+    // The rectangle the parent handed down, which is not where the element
+    // ends up once a margin and an alignment have had their say.  This is what
+    // the early-out compares against and what arrangeAsRoot passes again:
+    // going back to the placement instead would let a right-aligned element
+    // walk across its slot, one pass at a time.
+    Rect                 _arrangeSlot;
+    // Where it ended up, in the parent's coordinate space.
     Rect                 _arrangedRect;
     bool                 _measureDirty = true;
     bool                 _arrangeDirty = true;
