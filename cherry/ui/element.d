@@ -1556,20 +1556,10 @@ unittest
 
 unittest
 {
-    import cherry.platform.render : Color, Point, Rect;
+    import cherry.platform.render : RecordingContext;
 
     // The render walk visits the subtree in depth-first pre-order, so
     // parents paint under their children.
-    static class NullContext : DrawingContext
-    {
-        void clear(Color color) { }
-        void fillRectangle(Rect rect, Color color) { }
-        void drawRectangle(Rect rect, Color color, float strokeWidth = 1) { }
-        void fillEllipse(Rect bounds, Color color) { }
-        void drawEllipse(Rect bounds, Color color, float strokeWidth = 1) { }
-        void drawLine(Point from, Point to, Color color, float strokeWidth = 1) { }
-    }
-
     static string[] renderLog;
 
     static class Painter : Element
@@ -1596,7 +1586,7 @@ unittest
     a.addChild(c);
 
     renderLog = null;
-    root.renderSubtree(new NullContext);
+    root.renderSubtree(new RecordingContext);
     assert(renderLog == ["root", "a", "c", "b"]);
 }
 

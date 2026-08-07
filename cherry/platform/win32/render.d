@@ -35,7 +35,19 @@ final class D2DWindowRenderer : WindowRenderer
         ensureTarget();
 
         _target.BeginDraw();
+        _context.beginFrame();
+
         draw(_context);
+
+        // A plain statement rather than a scope(exit): if draw threw, the
+        // stack is legitimately unbalanced and asserting on the way out would
+        // replace the real exception with a misleading one.  beginFrame is
+        // what makes the next frame correct on that path; this only has to
+        // catch element code that returned normally holding a push.
+        assert(_context.transformDepth == 0,
+               "every pushTransform must be matched by a popTransform before "
+               ~ "the frame ends.");
+
         auto hr = _target.EndDraw(null, null);
 
         if (hr == D2DERR_RECREATE_TARGET)
@@ -136,7 +148,13 @@ private final class D2DDrawingContext : DrawingContext
     }
 
     void clear(Color color)
-    {
+    in {
+        assert(_transforms.depth == 0,
+               "Direct2D's Clear ignores the transform and fills the whole "
+               ~ "target, so clearing from inside an element's coordinate "
+               ~ "space would clear the window.  clear opens a frame.");
+    }
+    do {
         auto value = toColorF(color);
         _target.Clear(&value);
     }
@@ -171,7 +189,55 @@ private final class D2DDrawingContext : DrawingContext
                          recolor(color), strokeWidth, null);
     }
 
+    void pushTransform(Matrix transform)
+    {
+        _transforms.push(transform);
+        applyTransform();
+    }
+
+    void popTransform()
+    {
+        _transforms.pop();
+        applyTransform();
+    }
+
+    @property Matrix currentTransform()
+    {
+        return _transforms.current;
+    }
+
+   /*
+    * Puts the context back where a frame begins: nothing pushed, the identity
+    * in effect, whatever the frame before it left behind.
+    *
+    * The context is made once and lives across frames, so this is not
+    * housekeeping -- without it a frame that an element threw out of would
+    * leave the next one drawing inside a dead element's coordinate space,
+    * with the whole window offset and nothing to say why.
+    *
+    * At the start of a frame rather than the end of one, because the frame
+    * that leaves the stack unbalanced is exactly the frame whose ending code
+    * does not run.
+    */
+    void beginFrame()
+    {
+        _transforms.reset();
+        applyTransform();
+    }
+
+    /// What the renderer asserts on after handing the frame to element code.
+    @property size_t transformDepth()
+    {
+        return _transforms.depth;
+    }
+
 private:
+    void applyTransform()
+    {
+        auto value = toMatrix3x2(_transforms.current);
+        _target.SetTransform(&value);
+    }
+
     ID2D1Brush recolor(Color color)
     {
         auto value = toColorF(color);
@@ -196,6 +262,20 @@ private:
             bounds.width / 2, bounds.height / 2);
     }
 
+   /*
+    * Field by field, although the two layouts are identical and render.d has
+    * a static assert saying so.  Every other conversion in this file reads
+    * the same way, the mapping between the two naming schemes is worth seeing
+    * once, and the optimiser emits the same thing either way.  The
+    * blittability is there to be relied on by a backend that needs it, not to
+    * be spent here for nothing.
+    */
+    static D2D1_MATRIX_3X2_F toMatrix3x2(Matrix m) pure nothrow @nogc
+    {
+        return D2D1_MATRIX_3X2_F(m.m11, m.m12, m.m21, m.m22, m.dx, m.dy);
+    }
+
     ID2D1RenderTarget    _target;
     ID2D1SolidColorBrush _brush;
+    TransformStack       _transforms;
 }

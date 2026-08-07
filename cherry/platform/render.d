@@ -439,12 +439,27 @@ unittest
 
 /**
  * The surface elements draw onto during a frame.  Solid colors only for
- * now; brush objects, transforms, clips and text join the model as the
- * framework grows.
+ * now; brush objects, clips and text join the model as the framework grows.
+ *
+ * Everything is drawn in the coordinate space currently in effect, which
+ * starts each frame as the target's own and is changed by pushTransform.
+ * A length -- a strokeWidth -- is a length in that space too, so it scales
+ * with it.  Under the plain translations a layout pushes nothing changes;
+ * the day something is scaled it does, and a reader should not have to find
+ * that out from the screen.
  */
 interface DrawingContext
 {
-    /// Fills the whole target with the color.
+   /**
+    * Fills the whole target with the color, ignoring the current transform.
+    *
+    * clear is a frame's opening move rather than a drawing primitive: it has
+    * no geometry of its own to transform, and what it fills is the whole
+    * target however deep in a coordinate space the caller happens to be.
+    * Calling it from inside an element therefore clears the window and not
+    * the element, which is why it is only meaningful with nothing pushed --
+    * and why an implementation may refuse it when something is.
+    */
     void clear(Color color);
 
     /// Fills a rectangle.
@@ -461,6 +476,34 @@ interface DrawingContext
 
     /// Strokes a line segment.
     void drawLine(Point from, Point to, Color color, float strokeWidth = 1);
+
+   /**
+    * Enters a coordinate space of its own, expressed in the one in effect.
+    *
+    * A point p of the new space reaches the current one as `p * transform`,
+    * and the current one reaches the target as `* currentTransform`, so what
+    * takes effect is `transform * currentTransform` -- the new one on the
+    * left.  See Matrix for why that order is what it is.
+    */
+    void pushTransform(Matrix transform);
+
+   /**
+    * Leaves the space the matching pushTransform entered, going back to the
+    * transform that was in effect before it.
+    *
+    * Back to a value that was kept, not to one worked out by undoing the
+    * push: a transform with a zero scale has no inverse and must still be
+    * poppable.  Popping with nothing pushed is a programming error.
+    */
+    void popTransform();
+
+   /**
+    * What maps the space being drawn in now to the target's own.
+    *
+    * Read-only: push and pop are the only way to change it, which is what
+    * keeps the stack the one account of where things are.
+    */
+    @property Matrix currentTransform();
 }
 
 /**
@@ -473,6 +516,13 @@ interface WindowRenderer
    /**
     * Renders one frame: prepares the target, hands a live DrawingContext to
     * the callback, then presents.
+    *
+    * The context arrives with an empty transform stack at the identity, every
+    * frame, whatever the frame before it left behind.  That is a promise to
+    * the code that draws and a requirement on whoever implements this: the
+    * frame that leaves the stack unbalanced is the one an element threw out
+    * of, so putting it right belongs at the start of the next frame rather
+    * than at the end of that one.
     */
     void render(scope void delegate(DrawingContext) draw);
 
@@ -485,4 +535,118 @@ interface WindowRenderer
     * Releases the device resources.  The renderer must not be used after.
     */
     void dispose();
+}
+
+version (unittest)
+{
+   /**
+    * A DrawingContext that writes down what was drawn and where it landed.
+    *
+    * Every primitive is recorded with the current transform already applied,
+    * so a test asserts absolute numbers in the target's own space and never
+    * works the composition out for itself.  That is the whole point of it: a
+    * fake that recorded the coordinates it was handed would agree perfectly
+    * with a caller who had the composition backwards.
+    */
+    class RecordingContext : DrawingContext
+    {
+        enum Kind { clear, fillRectangle, drawRectangle, fillEllipse, drawEllipse, line }
+
+       /**
+        * One recorded primitive.  rect carries the transformed bounds of the
+        * four rectangle-shaped kinds, from and to the transformed ends of a
+        * line; only the fields the kind uses mean anything.
+        *
+        * strokeWidth is recorded as it was passed.  It is a length in the
+        * space that was in effect, and scaling it is the backend's business
+        * rather than this record's.
+        */
+        static struct Entry
+        {
+            Kind   kind;
+            Rect   rect;
+            Point  from;
+            Point  to;
+            Color  color;
+            float  strokeWidth = 0;
+            Matrix transform;
+        }
+
+        Entry[] entries;
+
+        void clear(Color color)
+        {
+            entries ~= Entry(Kind.clear, Rect.init, Point.init, Point.init,
+                             color, 0, _transforms.current);
+        }
+
+        void fillRectangle(Rect rect, Color color)
+        {
+            record(Kind.fillRectangle, rect, color, 0);
+        }
+
+        void drawRectangle(Rect rect, Color color, float strokeWidth = 1)
+        {
+            record(Kind.drawRectangle, rect, color, strokeWidth);
+        }
+
+        void fillEllipse(Rect bounds, Color color)
+        {
+            record(Kind.fillEllipse, bounds, color, 0);
+        }
+
+        void drawEllipse(Rect bounds, Color color, float strokeWidth = 1)
+        {
+            record(Kind.drawEllipse, bounds, color, strokeWidth);
+        }
+
+        void drawLine(Point from, Point to, Color color, float strokeWidth = 1)
+        {
+            entries ~= Entry(Kind.line, Rect.init,
+                             _transforms.current.transform(from),
+                             _transforms.current.transform(to),
+                             color, strokeWidth, _transforms.current);
+        }
+
+        void pushTransform(Matrix transform) { _transforms.push(transform); }
+        void popTransform() { _transforms.pop(); }
+        @property Matrix currentTransform() { return _transforms.current; }
+
+        /// How many pushes are outstanding -- what a test asks after a walk.
+        @property size_t depth() { return _transforms.depth; }
+
+    private:
+        void record(Kind kind, Rect rect, Color color, float strokeWidth)
+        {
+            entries ~= Entry(kind, mapBounds(_transforms.current, rect),
+                             Point.init, Point.init, color, strokeWidth,
+                             _transforms.current);
+        }
+
+       /*
+        * The axis-aligned bounds of the transformed rectangle: four corners
+        * mapped and boxed.  Exact while the transform is a translation or a
+        * scale, which is all a layout produces; under a turn it is a box
+        * around the shape, and a test asserting on it should know that.
+        */
+        static Rect mapBounds(Matrix m, Rect r)
+        {
+            immutable a = m.transform(Point(r.x, r.y));
+            immutable b = m.transform(Point(r.right, r.y));
+            immutable c = m.transform(Point(r.x, r.bottom));
+            immutable d = m.transform(Point(r.right, r.bottom));
+
+            immutable left   = min(min(a.x, b.x), min(c.x, d.x));
+            immutable top    = min(min(a.y, b.y), min(c.y, d.y));
+            immutable right  = max(max(a.x, b.x), max(c.x, d.x));
+            immutable bottom = max(max(a.y, b.y), max(c.y, d.y));
+
+            return Rect(left, top, right - left, bottom - top);
+        }
+
+        static float min(float a, float b) pure nothrow @nogc { return a < b ? a : b; }
+        static float max(float a, float b) pure nothrow @nogc { return a > b ? a : b; }
+
+        TransformStack _transforms;
+    }
 }
