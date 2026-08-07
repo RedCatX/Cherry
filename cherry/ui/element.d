@@ -5,9 +5,42 @@ import cherry.core.obj;
 import cherry.core.property;
 import cherry.core.rtti;
 import cherry.core.value;
-import cherry.platform.render : DrawingContext, Rect, Size;
+import cherry.platform.render : DrawingContext, Rect, Size, Thickness;
 import cherry.ui.event;
 import cherry.ui.layout : LayoutManager;
+
+/**
+ * Where an element sits in the horizontal room its parent gave it.
+ *
+ * Stretch is the odd one out: the other three place the element at the size it
+ * asked for and leave the rest of the room empty, while stretch makes it take
+ * the room instead.  An element that cannot stretch -- one with a width of its
+ * own, or a maximum, or content needing more room than there is -- falls back
+ * to the middle, or to the left edge when it overflows, so that what gets cut
+ * off is the far side rather than both.
+ *
+ * The member order is WPF's, which means the enum's own `.init` is `left`
+ * while the property defaults to `stretch`.  They differ on purpose: an
+ * alignment nobody chose should fill the space, but a bare `HorizontalAlignment`
+ * variable has to start somewhere and the familiar numbering is worth more
+ * than the coincidence.
+ */
+enum HorizontalAlignment
+{
+    left,
+    center,
+    right,
+    stretch
+}
+
+/// ditto, vertically.
+enum VerticalAlignment
+{
+    top,
+    center,
+    bottom,
+    stretch
+}
 
 /**
  * Base class for every node of the element tree.
@@ -46,11 +79,65 @@ class Element : CherryObject
         actualWidthKey  = Property.registerReadOnly("ActualWidth",  getRtti!float(), getRtti!Element(), actualMeta);
         actualHeightKey = Property.registerReadOnly("ActualHeight", getRtti!float(), getRtti!Element(), actualMeta);
 
+        // Space the element keeps clear around itself, and therefore part of
+        // what it costs its parent: a margin changes the answer measure gives,
+        // not merely where arrange puts things.
+        PropertyMetadata marginMeta;
+        marginMeta.defaultValue = Value(Thickness.init);
+        marginMeta.affectsMeasure = true;
+
+        marginProperty = Property.register("Margin", getRtti!Thickness(), getRtti!Element(), marginMeta);
+
+        // Bounds on the size, as plain numbers rather than as the set-or-unset
+        // that Width and Height need.  Absence has a number here: 0 is what
+        // max() ignores and infinity is what min() ignores, so a bound nobody
+        // gave takes part in the arithmetic and changes nothing.  That is what
+        // NaN could not do, which is the whole reason Width is different.
+        //
+        // The infinity stops here.  Only Width and Height reach the platform,
+        // and only they are cast to int on the way; nothing writes a bound
+        // into either, and nothing should start.
+        PropertyMetadata minMeta;
+        minMeta.defaultValue = Value(0.0f);
+        minMeta.affectsMeasure = true;
+
+        PropertyMetadata maxMeta;
+        maxMeta.defaultValue = Value(float.infinity);
+        maxMeta.affectsMeasure = true;
+
+        minWidthProperty  = Property.register("MinWidth",  getRtti!float(), getRtti!Element(), minMeta);
+        minHeightProperty = Property.register("MinHeight", getRtti!float(), getRtti!Element(), minMeta);
+        maxWidthProperty  = Property.register("MaxWidth",  getRtti!float(), getRtti!Element(), maxMeta);
+        maxHeightProperty = Property.register("MaxHeight", getRtti!float(), getRtti!Element(), maxMeta);
+
+        // Alignment moves an element inside room it has already been granted
+        // and never changes how much it asks for, so it is the cheaper of the
+        // two invalidations.
+        PropertyMetadata horizontalMeta;
+        horizontalMeta.defaultValue = Value(HorizontalAlignment.stretch);
+        horizontalMeta.affectsArrange = true;
+
+        PropertyMetadata verticalMeta;
+        verticalMeta.defaultValue = Value(VerticalAlignment.stretch);
+        verticalMeta.affectsArrange = true;
+
+        horizontalAlignmentProperty = Property.register("HorizontalAlignment",
+            getRtti!HorizontalAlignment(), getRtti!Element(), horizontalMeta);
+        verticalAlignmentProperty = Property.register("VerticalAlignment",
+            getRtti!VerticalAlignment(), getRtti!Element(), verticalMeta);
+
         sizeChangedEvent = RoutedEvent.register("SizeChanged", RoutingStrategy.direct, getRtti!Element());
     }
 
     static immutable(Property) widthProperty;
     static immutable(Property) heightProperty;
+    static immutable(Property) marginProperty;
+    static immutable(Property) minWidthProperty;
+    static immutable(Property) minHeightProperty;
+    static immutable(Property) maxWidthProperty;
+    static immutable(Property) maxHeightProperty;
+    static immutable(Property) horizontalAlignmentProperty;
+    static immutable(Property) verticalAlignmentProperty;
     static immutable(RoutedEvent) sizeChangedEvent;
 
    /**
@@ -105,6 +192,114 @@ class Element : CherryObject
     @property void height(float value)
     {
         setValue(heightProperty, Value(value));
+    }
+
+   /**
+    * The space this element keeps clear around itself.
+    *
+    * It is part of what the element costs: measure takes it out of the room on
+    * offer and puts it back onto the answer, so a parent adding its children
+    * up is adding up the space they occupy and the space they insist on
+    * keeping empty.
+    */
+    @property Thickness margin() const
+    {
+        return getValue(marginProperty).get!Thickness;
+    }
+
+    /// ditto
+    @property void margin(Thickness value)
+    {
+        setValue(marginProperty, Value(value));
+    }
+
+   /**
+    * Bounds on how small and how large the element may end up.
+    *
+    * Unlike width these are plain numbers with no unset state, because
+    * absence already has one: a minimum of zero and a maximum of infinity take
+    * part in the arithmetic and change nothing.  Width has to distinguish
+    * "none given" from a number because NaN would spread through sums; a bound
+    * is never summed, only ever compared, so it does not.
+    *
+    * A minimum outranks a maximum when the two contradict each other, rather
+    * than leaving a range nothing can satisfy.
+    */
+    @property float minWidth() const
+    {
+        return getValue(minWidthProperty).get!float;
+    }
+
+    /// ditto
+    @property void minWidth(float value)
+    {
+        setValue(minWidthProperty, Value(value));
+    }
+
+    /// ditto
+    @property float minHeight() const
+    {
+        return getValue(minHeightProperty).get!float;
+    }
+
+    /// ditto
+    @property void minHeight(float value)
+    {
+        setValue(minHeightProperty, Value(value));
+    }
+
+    /// ditto
+    @property float maxWidth() const
+    {
+        return getValue(maxWidthProperty).get!float;
+    }
+
+    /// ditto
+    @property void maxWidth(float value)
+    {
+        setValue(maxWidthProperty, Value(value));
+    }
+
+    /// ditto
+    @property float maxHeight() const
+    {
+        return getValue(maxHeightProperty).get!float;
+    }
+
+    /// ditto
+    @property void maxHeight(float value)
+    {
+        setValue(maxHeightProperty, Value(value));
+    }
+
+   /**
+    * Where the element sits in the room its parent gave it.
+    *
+    * Stretch, the default, means the element takes the room; anything else
+    * means it takes the size it asked for and sits somewhere in what it was
+    * offered.
+    */
+    @property HorizontalAlignment horizontalAlignment() const
+    {
+        return getValue(horizontalAlignmentProperty).get!HorizontalAlignment;
+    }
+
+    /// ditto
+    @property void horizontalAlignment(HorizontalAlignment value)
+    {
+        setValue(horizontalAlignmentProperty, Value(value));
+    }
+
+    /// ditto
+    @property VerticalAlignment verticalAlignment() const
+    {
+        return getValue(verticalAlignmentProperty).get!VerticalAlignment;
+    }
+
+    /// ditto
+    @property void verticalAlignment(VerticalAlignment value)
+    {
+        setValue(verticalAlignmentProperty, Value(value));
     }
 
    /**
@@ -1579,4 +1774,107 @@ unittest
 
     assert(child.isMeasureValid && child.isArrangeValid);
     assert(child.arrangedRect == Rect(0, 0, 120, 90));
+}
+
+unittest
+{
+    // An enum-typed property, which is a first for this framework: the RTTI of
+    // an enum is that enum and nothing else, so the integer behind it will not
+    // do -- exactly as in D itself.
+    import std.exception : assertThrown;
+
+    auto e = new Element;
+
+    assert(e.horizontalAlignment == HorizontalAlignment.stretch,
+           "the default the registration declared, which is not the enum's own .init");
+    assert(HorizontalAlignment.init == HorizontalAlignment.left,
+           "those two differ on purpose");
+    assert(e.getValue(Element.horizontalAlignmentProperty).get!HorizontalAlignment
+           == HorizontalAlignment.stretch);
+
+    e.horizontalAlignment = HorizontalAlignment.right;
+    assert(e.horizontalAlignment == HorizontalAlignment.right);
+    assert(e.hasLocalValue(Element.horizontalAlignmentProperty));
+
+    assertThrown(e.setValue(Element.horizontalAlignmentProperty, Value(0)));
+    assert(e.horizontalAlignment == HorizontalAlignment.right, "and the refused write left it alone");
+
+    e.clearValue(Element.horizontalAlignmentProperty);
+    assert(e.horizontalAlignment == HorizontalAlignment.stretch);
+
+    e.verticalAlignment = VerticalAlignment.bottom;
+    assert(e.verticalAlignment == VerticalAlignment.bottom);
+    assert(e.horizontalAlignment == HorizontalAlignment.stretch, "the two axes are separate properties");
+}
+
+unittest
+{
+    // A struct-typed property, also a first.  Note what decides whether it
+    // changed: the property system compares the stored bytes, not Thickness's
+    // own equality, so the same thickness assigned twice is not news.
+    auto e = new Element;
+
+    assert(e.margin == Thickness.init);
+    assert(!e.hasLocalValue(Element.marginProperty));
+
+    e.margin = Thickness(1, 2, 3, 4);
+    assert(e.margin == Thickness(1, 2, 3, 4));
+    assert(e.margin.horizontal == 4 && e.margin.vertical == 6);
+
+    e.measure(Size(500, 400));
+    e.arrange(Rect(0, 0, 500, 400));
+    assert(e.isMeasureValid);
+
+    e.margin = Thickness(1, 2, 3, 4);
+    assert(e.isMeasureValid, "the same thickness is not a change");
+
+    e.margin = Thickness(1, 2, 3, 5);
+    assert(!e.isMeasureValid, "a different one is");
+
+    e.clearValue(Element.marginProperty);
+    assert(e.margin == Thickness.init);
+}
+
+unittest
+{
+    // Which pass each of the new properties asks for.  Sizing bounds change
+    // how much room the element wants, so they reach the parent; alignment
+    // only moves it inside room it already has, so it does not.
+    auto parent = new Element;
+    auto e = new Element;
+    parent.addChild(e);
+
+    void settle()
+    {
+        // The child is invalidated first because a clean parent stops at its
+        // own early-out and never reaches down.
+        e.invalidateMeasure();
+        parent.measure(Size(500, 400));
+        parent.arrange(Rect(0, 0, 500, 400));
+        assert(parent.isMeasureValid && parent.isArrangeValid);
+        assert(e.isMeasureValid && e.isArrangeValid);
+    }
+
+    settle();
+    e.margin = Thickness(4);
+    assert(!e.isMeasureValid && !parent.isMeasureValid, "a margin is part of what it costs");
+
+    settle();
+    e.minWidth = 30;
+    assert(!e.isMeasureValid && !parent.isMeasureValid);
+
+    settle();
+    e.maxHeight = 300;
+    assert(!e.isMeasureValid && !parent.isMeasureValid);
+
+    settle();
+    e.horizontalAlignment = HorizontalAlignment.left;
+    assert(e.isMeasureValid, "where it sits does not change how big it is");
+    assert(!e.isArrangeValid);
+    assert(parent.isMeasureValid && parent.isArrangeValid, "and its parent does not move");
+
+    settle();
+    e.verticalAlignment = VerticalAlignment.top;
+    assert(e.isMeasureValid && !e.isArrangeValid);
+    assert(parent.isArrangeValid);
 }
