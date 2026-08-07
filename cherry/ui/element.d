@@ -5,7 +5,7 @@ import cherry.core.obj;
 import cherry.core.property;
 import cherry.core.rtti;
 import cherry.core.value;
-import cherry.platform.render : DrawingContext, Rect, Size, Thickness;
+import cherry.platform.render : DrawingContext, Matrix, Rect, Size, Thickness;
 import cherry.ui.event;
 import cherry.ui.layout : LayoutManager;
 
@@ -466,15 +466,35 @@ class Element : CherryObject
 
    /**
     * Renders this element and its whole subtree in depth-first pre-order:
-    * parents draw under their children.  Layout will later add clipping and
-    * per-element coordinate spaces; for now every element draws in the
-    * window's coordinate space.
+    * parents draw under their children.
+    *
+    * Each element draws in a coordinate space of its own.  Its placement is
+    * pushed onto the context as a translation before onRender runs, so an
+    * element draws itself at (0, 0) whatever its parent did with it, and its
+    * children draw themselves at (0, 0) inside that.  Nobody offsets anybody
+    * by hand, which is what lets a control be moved without a line of its
+    * drawing code changing.
+    *
+    * The root is not a special case: it pushes its own placement like every
+    * other element.  A Window's placement is the client area's origin, so
+    * what it pushes is a translation by nothing -- which is why a window
+    * needs no exception rather than being one.
+    *
+    * Nothing is clipped.  An element drawing outside its own bounds is seen
+    * doing it, on purpose: overflow that shows is overflow that gets fixed.
+    *
+    * The push is undone on the way out whether onRender returns or throws, so
+    * an exception leaving an element finds the context as balanced as it left
+    * it.
     */
     final void renderSubtree(DrawingContext context)
     in {
         assert(context !is null);
     }
     do {
+        context.pushTransform(Matrix.translation(_arrangedRect.x, _arrangedRect.y));
+        scope (exit) context.popTransform();
+
         onRender(context);
 
         foreach (child; _children)
@@ -951,8 +971,17 @@ protected:
     }
 
    /**
-    * Draws this element's own content.  The default element draws nothing;
-    * controls override this.
+    * Draws this element's own content, in the element's own coordinate space:
+    * (0, 0) is its top left corner and it runs to actualWidth by
+    * actualHeight, so its own bounds are Rect(0, 0, actualWidth,
+    * actualHeight).  The margin is already outside that, since arrangedRect
+    * is inset by it and arrangedRect's origin is what was pushed.
+    *
+    * arrangedRect says where this element sits in its parent, and is not what
+    * to draw against: renderSubtree has applied it already, and an element
+    * that reads it here draws itself twice as far from home as it meant to.
+    *
+    * The default element draws nothing; controls override this.
     */
     void onRender(DrawingContext context)
     {
@@ -2336,4 +2365,194 @@ unittest
 
     c.arrange(Rect(0, 0, 200, 100));
     assert(c.arranges == 1);
+}
+
+version (unittest)
+{
+    import cherry.platform.render : Color, Point, RecordingContext;
+
+   /*
+    * Draws its own bounds, which in its own space start at the origin.  What
+    * a test then reads back from the recorder is where those bounds landed.
+    */
+    private static class Marker : Element
+    {
+        protected override void onRender(DrawingContext context)
+        {
+            context.fillRectangle(Rect(0, 0, actualWidth, actualHeight), Color.black);
+        }
+    }
+}
+
+unittest
+{
+    // An element draws at its own origin, and the walk puts it where it
+    // belongs.  Two levels of margin, so the spaces nest.
+    auto root = new Marker;
+    auto a = new Marker;
+    auto g = new Marker;
+    root.addChild(a);
+    a.addChild(g);
+
+    a.margin = Thickness(10);
+    g.margin = Thickness(5);
+
+    root.measure(Size(200, 100));
+    root.arrange(Rect(0, 0, 200, 100));
+
+    auto ctx = new RecordingContext;
+    root.renderSubtree(ctx);
+
+    assert(ctx.entries.length == 3);
+    assert(ctx.entries[0].rect == Rect(0, 0, 200, 100));
+    assert(ctx.entries[1].rect == Rect(10, 10, 180, 80));
+    assert(ctx.entries[2].rect == Rect(15, 15, 170, 70));
+    assert(ctx.depth == 0, "and the walk left the stack as it found it");
+}
+
+unittest
+{
+    // The test that earns its place: the only one at tree level that can fail
+    // when the composition order is reversed.
+    //
+    // renderSubtree pushes translations and nothing else, and translations
+    // commute -- so a whole tree of nested elements gives the same answer
+    // whichever way round the composition goes.  Only something that is not a
+    // translation tells them apart, and this pushes a scale from inside an
+    // element that has already been moved.
+    static class Scaler : Element
+    {
+        protected override void onRender(DrawingContext context)
+        {
+            context.pushTransform(Matrix.scaling(2, 2));
+            context.fillRectangle(Rect(10, 10, 20, 20), Color.black);
+            context.popTransform();
+        }
+    }
+
+    auto root = new Element;
+    auto scaler = new Scaler;
+    root.addChild(scaler);
+
+    scaler.width = 50;
+    scaler.height = 20;
+    scaler.margin = Thickness(100, 50, 0, 0);
+    scaler.horizontalAlignment = HorizontalAlignment.left;
+    scaler.verticalAlignment = VerticalAlignment.top;
+
+    root.measure(Size(400, 300));
+    root.arrange(Rect(0, 0, 400, 300));
+    assert(scaler.arrangedRect == Rect(100, 50, 50, 20));
+
+    auto ctx = new RecordingContext;
+    root.renderSubtree(ctx);
+
+    // Scale first, then the element's own placement: (10,10) doubles to
+    // (20,20) and then moves by (100,50).  Composed the other way it would be
+    // (10+100, 10+50) doubled, which is (220, 120) -- not subtly wrong.
+    assert(ctx.entries[$ - 1].rect == Rect(120, 70, 40, 40));
+}
+
+unittest
+{
+    // A margin and an alignment move a child, and its drawing code does not
+    // notice.  Both halves matter: the first is that the placement is
+    // honoured, the second is the promise of the whole design.
+    auto parent = new Element;
+    auto child = new Marker;
+    parent.addChild(child);
+
+    child.width = 50;
+    child.height = 20;
+    child.margin = Thickness(5);
+    child.horizontalAlignment = HorizontalAlignment.right;
+    child.verticalAlignment = VerticalAlignment.bottom;
+
+    parent.measure(Size(200, 100));
+    parent.arrange(Rect(0, 0, 200, 100));
+    assert(child.arrangedRect == Rect(145, 75, 50, 20));
+
+    auto ctx = new RecordingContext;
+    child.renderSubtree(ctx);
+    assert(ctx.entries[0].rect == Rect(145, 75, 50, 20), "where the parent put it");
+
+    // And what it asked to draw, in its own space, was the origin.
+    assert(ctx.entries[0].transform.transform(Point(0, 0)) == Point(145, 75));
+    assert(child.actualWidth == 50 && child.actualHeight == 20,
+           "its own bounds are Rect(0, 0, 50, 20) and it never said otherwise");
+}
+
+unittest
+{
+    // The root is not a special case -- it pushes its own placement too,
+    // which is why a Window needs no exception rather than being one.
+    auto e = new Marker;
+    e.arrange(Rect(10, 20, 300, 150));
+
+    auto ctx = new RecordingContext;
+    e.renderSubtree(ctx);
+
+    assert(ctx.entries[0].rect == Rect(10, 20, 300, 150));
+}
+
+unittest
+{
+    // What an element sees when it asks where it is.
+    static class Asker : Element
+    {
+        Point origin;
+
+        protected override void onRender(DrawingContext context)
+        {
+            origin = context.currentTransform.transform(Point(0, 0));
+        }
+    }
+
+    auto root = new Element;
+    auto asker = new Asker;
+    root.addChild(asker);
+
+    asker.width = 40;
+    asker.height = 30;
+    asker.horizontalAlignment = HorizontalAlignment.right;
+    asker.verticalAlignment = VerticalAlignment.bottom;
+
+    root.measure(Size(200, 100));
+    root.arrange(Rect(0, 0, 200, 100));
+
+    root.renderSubtree(new RecordingContext);
+    assert(asker.origin == Point(160, 70), "the current transform maps my space to the window's");
+}
+
+unittest
+{
+    // An exception on its way out of an element unwinds every push it passes,
+    // so whoever called renderSubtree finds the context as they left it.
+    import std.exception : assertThrown;
+
+    static class Thrower : Element
+    {
+        protected override void onRender(DrawingContext context)
+        {
+            throw new Exception("boom");
+        }
+    }
+
+    auto root = new Element;
+    auto middle = new Element;
+    auto thrower = new Thrower;
+    root.addChild(middle);
+    middle.addChild(thrower);
+
+    root.measure(Size(200, 100));
+    root.arrange(Rect(0, 0, 200, 100));
+
+    auto ctx = new RecordingContext;
+    assertThrown(root.renderSubtree(ctx));
+    assert(ctx.depth == 0, "three pushes, three pops, one exception");
+
+    // The positive control: a walk that returns normally ends level too.
+    auto plain = new RecordingContext;
+    new Element().renderSubtree(plain);
+    assert(plain.depth == 0);
 }
