@@ -617,9 +617,22 @@ class Element : CherryObject
     * Measures the element against the space the parent can offer, leaving the
     * answer in desiredSize.
     *
-    * A width or height of its own replaces what was offered rather than
-    * competing with it: an element told to be 200 wide is measured against
-    * 200, so its content arranges itself for the width it will really get.
+    * The margin comes out of what is offered and goes back onto the answer:
+    * the parent pays for it either way, so it belongs in the price.  Width,
+    * Height and the bounds fold into one range per axis, and it is that range
+    * rather than the raw offer that the content is measured against -- an
+    * element told to be 200 wide is measured against 200, so its content
+    * arranges itself for the width it will really get.
+    *
+    * availableSize may be infinite on an axis, and a parent that wants to know
+    * what a child would like unprompted is expected to say so that way rather
+    * than by naming a large number.  Nothing infinite comes back out.  arrange
+    * is the opposite: a rectangle is a place, and a place is never infinite.
+    *
+    * What comes back is also never larger than what was offered, so a parent
+    * adding its children up is adding up sizes that fit in the room it has.
+    * What the element really wanted is not lost -- unclippedDesiredSize keeps
+    * it, and arrange goes back to it.
     */
     final void measure(Size availableSize)
     {
@@ -634,19 +647,41 @@ class Element : CherryObject
         // reached again from inside measureOverride sees the one in flight.
         _previousConstraint = availableSize;
 
-        auto constraint = availableSize;
+        immutable m = margin;
 
-        if (isWidthSet)
-            constraint.width = width;
-        if (isHeightSet)
-            constraint.height = height;
+        // A margin wider than the room on offer would leave a negative amount,
+        // which is not a size anything can be measured against.
+        auto constraint = Size(notBelowZero(availableSize.width  - m.horizontal),
+                               notBelowZero(availableSize.height - m.vertical));
+
+        immutable limits = MinMax(this);
+
+        constraint.width  = atLeast(atMost(constraint.width,  limits.maxWidth),  limits.minWidth);
+        constraint.height = atLeast(atMost(constraint.height, limits.maxHeight), limits.minHeight);
 
         immutable measured = measureOverride(constraint);
 
-        // What the element asks for: the size it was given where it was given
-        // one, and what its content needs everywhere else.
-        _desiredSize = Size(isWidthSet  ? width  : measured.width,
-                            isHeightSet ? height : measured.height);
+        assert(measured.width < float.infinity && measured.height < float.infinity,
+               "measureOverride must answer with a finite size even when it was "
+               ~ "offered an infinite one: infinity is the question, never the answer.");
+
+        // What the content really needs, before anything above has a say.  The
+        // margin is excluded, so this lines up directly with the slot-less-
+        // margin that arrange works in.
+        _unclippedDesiredSize = Size(atLeast(measured.width,  limits.minWidth),
+                                     atLeast(measured.height, limits.minHeight));
+
+        // The margin goes back on before the answer leaves.  Kept as bare
+        // floats between the two clamps, because a negative margin can drive
+        // either below zero in between and flooring too early would hide its
+        // effect on the cap against what was offered.
+        auto totalWidth  = atMost(_unclippedDesiredSize.width,  limits.maxWidth)  + m.horizontal;
+        auto totalHeight = atMost(_unclippedDesiredSize.height, limits.maxHeight) + m.vertical;
+
+        totalWidth  = atMost(totalWidth,  availableSize.width);
+        totalHeight = atMost(totalHeight, availableSize.height);
+
+        _desiredSize = Size(notBelowZero(totalWidth), notBelowZero(totalHeight));
         _measureDirty = false;
     }
 
@@ -696,6 +731,21 @@ class Element : CherryObject
     @property Size desiredSize() const pure nothrow @nogc
     {
         return _desiredSize;
+    }
+
+   /**
+    * What the content needed at the last measure, before the room on offer was
+    * allowed to cut it down, and without the margin.
+    *
+    * desiredSize is what the parent is told, and it is capped at what the
+    * parent offered so that a panel adding its children up adds up sizes that
+    * fit.  This is the number that got capped.  It is what arrange goes back
+    * to when the element is not being stretched, which is why an element that
+    * does not fit overflows its slot rather than being squeezed into it.
+    */
+    @property Size unclippedDesiredSize() const pure nothrow @nogc
+    {
+        return _unclippedDesiredSize;
     }
 
    /**
@@ -921,6 +971,41 @@ protected:
 
 private:
    /*
+    * The one width range and the one height range an element may end up in,
+    * from Width, Height and the four bounds together.
+    *
+    * They are not rivals.  A width of its own collapses the range onto itself;
+    * an unset one leaves it floored at the minimum and open up to the maximum.
+    * That collapse is what keeps the old behaviour intact: with a Width set,
+    * minWidth and maxWidth are both that width, so clamping against the range
+    * replaces the offered constraint exactly as the plain assignment used to.
+    *
+    * The two lines per axis apply the maximum to the width first and the
+    * minimum last, which is what makes a MinWidth of 300 beat a MaxWidth of
+    * 100 instead of leaving a range nothing can satisfy.
+    */
+    static struct MinMax
+    {
+        this(Element e)
+        {
+            maxWidth = e.maxWidth;
+            minWidth = e.minWidth;
+            maxWidth = atLeast(atMost(e.isWidthSet ? e.width : float.infinity, maxWidth), minWidth);
+            minWidth = atLeast(atMost(e.isWidthSet ? e.width : 0.0f,           maxWidth), minWidth);
+
+            maxHeight = e.maxHeight;
+            minHeight = e.minHeight;
+            maxHeight = atLeast(atMost(e.isHeightSet ? e.height : float.infinity, maxHeight), minHeight);
+            minHeight = atLeast(atMost(e.isHeightSet ? e.height : 0.0f,           maxHeight), minHeight);
+        }
+
+        float minWidth;
+        float maxWidth;
+        float minHeight;
+        float maxHeight;
+    }
+
+   /*
     * The layout pass this element belongs to, which is the one belonging to
     * the dispatcher it is bound to.
     */
@@ -977,7 +1062,15 @@ private:
     Element              _parent;
     Element[]            _children;
     HandlerEntry[][uint] _handlers;
+    // What the parent is told this element costs: the content's size, bounded,
+    // plus the margin, and never more than the parent offered.
     Size                 _desiredSize;
+    // What the content actually needed, before the offer above was allowed to
+    // cut it down, and with the margin excluded so it lines up directly with
+    // the slot-less-margin arrange works in.  arrange goes back to this
+    // whenever the element is not being stretched: the clipped size is what
+    // the parent could spare, which is not the same as what was wanted.
+    Size                 _unclippedDesiredSize;
     // The availableSize the last measure that ran was given, as it arrived --
     // before Width and Height are laid over it, since that is what the next
     // caller's availableSize gets compared against.
@@ -985,6 +1078,38 @@ private:
     Rect                 _arrangedRect;
     bool                 _measureDirty = true;
     bool                 _arrangeDirty = true;
+}
+
+/*
+ * The two clamps layout spends its time in, named for what they mean rather
+ * than for which way round the comparison goes.
+ *
+ * Written as comparisons rather than through std.algorithm so that an infinite
+ * ceiling costs one test and nothing else: `value > infinity` is false, so a
+ * maximum nobody set drops straight out.
+ */
+private float atLeast(float value, float floor) pure nothrow @nogc
+{
+    return value < floor ? floor : value;
+}
+
+/// ditto
+private float atMost(float value, float ceiling) pure nothrow @nogc
+{
+    return value > ceiling ? ceiling : value;
+}
+
+/*
+ * A length a margin may have driven below zero.
+ *
+ * Spelled `> 0` rather than as atLeast(value, 0) on purpose: this sits at the
+ * outer edge of the arithmetic, and a NaN arriving from somewhere comes out of
+ * here as zero instead of travelling on into a constraint, where it would
+ * defeat the measure early-out for good.
+ */
+private float notBelowZero(float value) pure nothrow @nogc
+{
+    return value > 0 ? value : 0;
 }
 
 /**
@@ -1406,18 +1531,26 @@ unittest
     auto bare = new Element;
     bare.measure(Size(500, 400));
     assert(bare.desiredSize == Size(0, 0));
+    assert(bare.unclippedDesiredSize == Size(0, 0));
 
     auto sized = new Element;
     sized.width = 200;
     sized.height = 100;
     sized.measure(Size(500, 400));
     assert(sized.desiredSize == Size(200, 100));
+    assert(sized.unclippedDesiredSize == Size(200, 100),
+           "it fitted, so there is nothing for the two to disagree about");
 
-    // Even one that does not fit: the parent is told what was asked for and
-    // decides for itself what to do about it.
+    // One that does not fit is not told it fits, and neither is its parent.
+    // What comes back can never exceed what was offered, so a panel adding its
+    // children up is adding up sizes that fit in the room it has -- and the
+    // demand is not lost, it is on the record next door, which is where
+    // arrange goes to find it.
     sized.width = 900;
     sized.measure(Size(500, 400));
-    assert(sized.desiredSize.width == 900);
+    assert(sized.desiredSize.width == 500, "the parent hears only what it offered");
+    assert(sized.unclippedDesiredSize.width == 900, "and what was really wanted survives");
+    assert(sized.desiredSize.height == 100, "the axis that fitted is untouched");
 }
 
 unittest
@@ -1877,4 +2010,127 @@ unittest
     e.verticalAlignment = VerticalAlignment.top;
     assert(e.isMeasureValid && !e.isArrangeValid);
     assert(parent.isArrangeValid);
+}
+
+version (unittest)
+{
+   /*
+    * Records the constraint it was measured against and answers with a size
+    * fixed in advance, so a test can look at both halves of a measure.
+    */
+    private static class SizeProbe : Element
+    {
+        Size seenAvailable;
+        Size answer;
+
+        this(Size answer = Size(0, 0))
+        {
+            this.answer = answer;
+        }
+
+        protected override Size measureOverride(Size availableSize)
+        {
+            seenAvailable = availableSize;
+            return answer;
+        }
+    }
+}
+
+unittest
+{
+    // The margin comes out of the room on offer and goes back onto the answer.
+    auto p = new SizeProbe(Size(100, 50));
+    p.margin = Thickness(10, 20, 30, 40);
+
+    p.measure(Size(500, 400));
+
+    assert(p.seenAvailable == Size(460, 340), "40 of width and 60 of height went to the margin");
+    assert(p.unclippedDesiredSize == Size(100, 50), "what the content needed, margin excluded");
+    assert(p.desiredSize == Size(140, 110), "what it costs the parent, margin included");
+}
+
+unittest
+{
+    // A margin wider than the room on offer leaves nothing rather than leaving
+    // a negative amount, and the answer is still capped at what was offered.
+    auto p = new SizeProbe(Size(0, 0));
+    p.margin = Thickness(400);
+
+    p.measure(Size(500, 400));
+
+    assert(p.seenAvailable == Size(0, 0), "there is no such thing as minus sixty of width");
+    assert(p.desiredSize == Size(500, 400), "and it wants all of what there was");
+}
+
+unittest
+{
+    // Bounds and an explicit width are one range, not rivals.
+    auto p = new SizeProbe(Size(0, 0));
+
+    // A minimum raises the question without raising what the parent is told.
+    p.minWidth = 100;
+    p.measure(Size(50, 400));
+    assert(p.seenAvailable.width == 100);
+    assert(p.unclippedDesiredSize.width == 100);
+    assert(p.desiredSize.width == 50, "the offer still caps the answer");
+
+    // A maximum lowers it.
+    p.invalidateMeasure();
+    p.minWidth = 0;
+    p.maxWidth = 80;
+    p.measure(Size(500, 400));
+    assert(p.seenAvailable.width == 80);
+
+    // A width of its own collapses the range onto itself.
+    p.invalidateMeasure();
+    p.maxWidth = 500;
+    p.minWidth = 50;
+    p.width = 200;
+    p.measure(Size(1000, 400));
+    assert(p.seenAvailable.width == 200);
+
+    // A maximum pulls that width down.
+    p.invalidateMeasure();
+    p.width = 900;
+    p.maxWidth = 400;
+    p.measure(Size(1000, 400));
+    assert(p.seenAvailable.width == 400);
+
+    // And a minimum beats a maximum that contradicts it, rather than leaving a
+    // range nothing can satisfy.
+    p.invalidateMeasure();
+    p.clearValue(Element.widthProperty);
+    p.minWidth = 300;
+    p.maxWidth = 100;
+    p.measure(Size(1000, 400));
+    assert(p.seenAvailable.width == 300);
+}
+
+unittest
+{
+    // Infinity is how a parent asks "how much would you like?".  It reaches
+    // measureOverride only when nothing bounds the element, which is exactly
+    // when the question means anything.
+    auto p = new SizeProbe(Size(40, 25));
+
+    p.measure(Size(float.infinity, 400));
+    assert(p.seenAvailable.width == float.infinity);
+    assert(p.desiredSize == Size(40, 25), "nothing infinite comes back out");
+
+    p.invalidateMeasure();
+    p.margin = Thickness(10);
+    p.measure(Size(float.infinity, 400));
+    assert(p.seenAvailable.width == float.infinity, "a finite margin does not dent it");
+
+    p.invalidateMeasure();
+    p.margin = Thickness.init;
+    p.maxWidth = 120;
+    p.measure(Size(float.infinity, 400));
+    assert(p.seenAvailable.width == 120, "a maximum is what turns the offer back into a number");
+
+    // And the early-out survives it, which it would not survive for NaN.
+    auto c = new Counter;
+    c.measure(Size(float.infinity, 400));
+    c.measure(Size(float.infinity, 400));
+    assert(c.measures == 1);
 }
