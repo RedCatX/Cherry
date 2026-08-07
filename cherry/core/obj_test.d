@@ -64,9 +64,14 @@ private bool isEven(const(Value) v)
     return (v.get!int & 1) == 0;
 }
 
-private void onWidthChanged(const(Object), const(Value), const(Value))
+private Value lastOldWidth;
+private Value lastNewWidth;
+
+private void onWidthChanged(const(Object), const(Value) oldValue, const(Value) newValue)
 {
     widthChangedCount++;
+    lastOldWidth = Value(oldValue);
+    lastNewWidth = Value(newValue);
 }
 
 unittest
@@ -109,6 +114,39 @@ unittest
     auto w2 = new Widget;
     w.setValue(Widget.widthProperty, Value(10));
     assert(w2.getValue(Widget.widthProperty).get!int == 100);
+}
+
+unittest
+{
+    // Clearing a value is a change like any other, and is reported like one.
+    //
+    // It used to be silent, which made it the one way to move a property
+    // without anyone hearing: a control that reverts its Width to the default
+    // would have gone on being laid out at the width it no longer has.
+    auto w = new Widget;
+
+    w.setValue(Widget.widthProperty, Value(250));
+    widthChangedCount = 0;
+
+    w.clearValue(Widget.widthProperty);
+    assert(widthChangedCount == 1);
+    assert(lastOldWidth.get!int == 250);
+    assert(lastNewWidth.get!int == 100, "the default is what it reverted to");
+
+    // Nothing was set, so nothing changed and nobody is told.
+    w.clearValue(Widget.widthProperty);
+    assert(widthChangedCount == 1);
+
+    // Set to what the default already is: the store changes, the effective
+    // value does not, and the handlers hear about neither the set nor the
+    // clear.
+    w.setValue(Widget.widthProperty, Value(100));
+    assert(widthChangedCount == 1);
+    assert(w.hasLocalValue(Widget.widthProperty));
+
+    w.clearValue(Widget.widthProperty);
+    assert(widthChangedCount == 1);
+    assert(!w.hasLocalValue(Widget.widthProperty));
 }
 
 unittest

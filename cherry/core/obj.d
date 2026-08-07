@@ -109,7 +109,14 @@ class CherryObject : DispatcherObject
     }
 
    /**
-    * Removes any locally set value, reverting the property to its default.
+    * Removes any locally set value, reverting the property to its default --
+    * or, for a property that inherits, to whatever the chain supplies.
+    *
+    * Reported like any other change, because it is one: the effective value is
+    * read before and after, and the handlers run when the two differ.  Nothing
+    * distinguishes "reverted to 100" from "assigned 100" to a handler, and
+    * nothing should: what a handler acts on is the value, not the route it
+    * arrived by.
     */
     void clearValue(immutable(Property) property)
     in {
@@ -118,7 +125,20 @@ class CherryObject : DispatcherObject
     do {
         verifyAccess();
 
+        if ((property.id in _values) is null)
+            return;
+
+        immutable metadata = resolveMetadata(property);
+
+        // Read through getValue rather than the table, so an inherited value or
+        // a computed read-only one is what gets compared -- the removal only
+        // uncovers whatever was underneath.
+        Value oldValue = getValue(property);
         _values.remove(property.id);
+        Value newValue = getValue(property);
+
+        if (oldValue != newValue)
+            notifyChanged(property, metadata, oldValue, newValue);
     }
 
    /**
@@ -193,7 +213,19 @@ private:
         _values[property.id] = value;
 
         if (oldValue != value)
-            metadata.raisePropertyChanged(this, oldValue, value);
+            notifyChanged(property, metadata, oldValue, value);
+    }
+
+   /*
+    * The one place a property change is announced, shared by assignment and by
+    * clearValue so the two cannot drift apart.
+    */
+    void notifyChanged(immutable(Property) property,
+                       ref immutable(PropertyMetadata) metadata,
+                       Value oldValue,
+                       Value newValue)
+    {
+        metadata.raisePropertyChanged(this, oldValue, newValue);
     }
 
 private:
