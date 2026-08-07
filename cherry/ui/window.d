@@ -124,7 +124,7 @@ class Window : Element
         // Lay the tree out once here, so an element added to a brand new
         // window can be asked for its actualWidth without first waiting for
         // whatever resize the platform happens to report.
-        performLayout(width, height);
+        performLayout();
 
         // Register new Window object in UIApplication
         if (UIApplication.instance !is null)
@@ -377,11 +377,15 @@ private:
    /*
     * The window is the root of its tree: nothing above it dictates a size, so
     * the space the platform granted is the space the layout works within.
+    *
+    * Goes through the two root entry points rather than repeating their
+    * arithmetic, so the constructor's path and the resize path cannot drift
+    * apart.
     */
-    void performLayout(float width, float height)
+    void performLayout()
     {
-        measure(Size(width, height));
-        arrange(Rect(0, 0, width, height));
+        measureAsRoot();
+        arrangeAsRoot();
     }
 
    /*
@@ -389,16 +393,28 @@ private:
     * so it is the one for which the last question it was asked is not the best
     * answer available.  Width and Height are, because handleResized keeps them
     * truthful about what the platform granted.
+    *
+    * The margin is added here and taken straight back out by the generic code
+    * below, which is the point: a margin says where an element sits inside a
+    * parent's slot, and a window has no parent to sit inside.  Left alone it
+    * would inset the content at the top left and push the same amount off the
+    * bottom right, since a window's Width is always set and so its content is
+    * arranged at exactly that width.  Cancelling it makes a Margin on a Window
+    * cost nothing instead of quietly costing the bottom right corner.  With no
+    * margin -- which is every window that never sets one -- this is the same
+    * arithmetic it always was.
     */
     public override void measureAsRoot()
     {
-        measure(Size(width, height));
+        immutable m = margin;
+        measure(Size(width + m.horizontal, height + m.vertical));
     }
 
     /// ditto
     public override void arrangeAsRoot()
     {
-        arrange(Rect(0, 0, width, height));
+        immutable m = margin;
+        arrange(Rect(-m.left, -m.top, width + m.horizontal, height + m.vertical));
     }
 
     static void titleChanged(const(Object) obj, const(Value) oldValue, const(Value) newValue)
@@ -809,4 +825,41 @@ unittest
     w.platform.host.onResized(600, 400);
 
     assert(child.arranges == before, "same numbers, nothing to work out");
+}
+
+unittest
+{
+    // A margin on a window costs nothing.  It says where an element sits
+    // inside a parent's slot, and a window has no parent to sit inside; left
+    // to the generic code it would inset the content at the top left and push
+    // the same amount off the bottom right.
+    auto w = makeWindow();
+    auto child = new Element;
+    w.window.addChild(child);
+    w.window.updateLayout();
+
+    w.window.margin = Thickness(10);
+    w.window.updateLayout();
+
+    assert(w.window.actualWidth == 600 && w.window.actualHeight == 400);
+    assert(child.arrangedRect == Rect(0, 0, 600, 400), "still the whole client area");
+}
+
+unittest
+{
+    // A minimum larger than the window constrains the content, not the native
+    // frame: the tree is laid out at the minimum and overflows the client
+    // area.  Pushing the minimum out to the OS, so the user cannot drag the
+    // window below it, needs a platform seam that does not exist yet --
+    // PlatformWindow knows setClientSize and nothing about limits.
+    auto w = makeWindow();
+    auto child = new Element;
+    w.window.addChild(child);
+    w.window.updateLayout();
+
+    w.window.minWidth = 1000;
+    w.window.updateLayout();
+
+    assert(child.actualWidth == 1000, "laid out at the minimum");
+    assert(w.platform.width == 600, "and the native window was left where it was");
 }
