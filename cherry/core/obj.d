@@ -3,7 +3,7 @@ module cherry.core.obj;
 import cherry.core.rtti;
 import cherry.core.value;
 import cherry.core.property;
-import cherry.core.dispatcher;
+import cherry.core.threading;
 
 /**
  * Base class for every object that participates in the Cherry property system.
@@ -226,3 +226,5 @@ private:
 
     Value[uint] _values;
 }
+
+

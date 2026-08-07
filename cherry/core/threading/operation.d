@@ -1,13 +1,13 @@
-module cherry.core.dispatcher.operation;
+module cherry.core.threading.operation;
 
 import core.atomic : atomicLoad, atomicStore;
 import core.sync.condition : Condition;
 import core.sync.mutex : Mutex;
 
 import cherry.core.multicast;
-import cherry.core.dispatcher.dispatcher;
-import cherry.core.dispatcher.queue;
-import cherry.core.dispatcher.types;
+import cherry.core.threading.dispatcher;
+import cherry.core.threading.queue;
+import cherry.core.threading.types;
 
 /**
  * A delegate type for handling DispatcherOperation events.
@@ -243,7 +243,7 @@ version (unittest)
     import core.thread : Thread;
     import core.time : msecs;
 
-    import cherry.core.dispatcher.testing;
+    import cherry.core.threading.testing;
     import cherry.platform;
 }
 

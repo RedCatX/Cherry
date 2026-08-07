@@ -1,7 +1,7 @@
 module cherry.core.application;
 
 import cherry.core.multicast;
-import cherry.core.dispatcher;
+import cherry.core.threading;
 import cherry.platform.dialog;
 
 /**

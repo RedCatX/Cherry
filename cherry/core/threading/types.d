@@ -1,4 +1,4 @@
-module cherry.core.dispatcher.types;
+module cherry.core.threading.types;
 
 /**
  * An enunmeration describing the priorities at which operations 

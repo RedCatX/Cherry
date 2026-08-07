@@ -1,10 +1,10 @@
-module cherry.core.dispatcher.timer;
+module cherry.core.threading.timer;
 
 import core.time : Duration, MonoTime;
 
 import cherry.core.multicast;
-import cherry.core.dispatcher.dispatcher;
-import cherry.core.dispatcher.types;
+import cherry.core.threading.dispatcher;
+import cherry.core.threading.types;
 import cherry.core.value;
 
 /**
@@ -199,7 +199,7 @@ version (unittest)
     import core.thread : Thread;
     import core.time : msecs;
 
-    import cherry.core.dispatcher.testing;
+    import cherry.core.threading.testing;
 }
 
 unittest // ticks arrive on the dispatcher thread until the timer is stopped

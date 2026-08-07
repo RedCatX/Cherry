@@ -1,4 +1,4 @@
-module cherry.core.dispatcher.dispatcher;
+module cherry.core.threading.dispatcher;
 
 import core.atomic : atomicLoad, atomicOp, atomicStore;
 import core.sync.mutex : Mutex;
@@ -7,11 +7,11 @@ import core.time : Duration, MonoTime, dur;
 
 import cherry.core.multicast;
 import cherry.platform;
-import cherry.core.dispatcher.frame;
-import cherry.core.dispatcher.operation;
-import cherry.core.dispatcher.queue;
-import cherry.core.dispatcher.timer;
-import cherry.core.dispatcher.types;
+import cherry.core.threading.frame;
+import cherry.core.threading.operation;
+import cherry.core.threading.queue;
+import cherry.core.threading.timer;
+import cherry.core.threading.types;
 
 /**
  *
@@ -686,7 +686,7 @@ version (unittest)
     import core.atomic : atomicOp;
     import core.time : msecs;
 
-    import cherry.core.dispatcher.testing;
+    import cherry.core.threading.testing;
 }
 
 // ===========================================================================

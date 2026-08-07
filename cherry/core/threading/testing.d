@@ -1,4 +1,4 @@
-module cherry.core.dispatcher.testing;
+module cherry.core.threading.testing;
 
 /**
  * Helpers shared by the unit tests of the modules in this package.  The whole
@@ -11,10 +11,10 @@ version (unittest):
 import core.thread : Thread;
 
 import cherry.platform;
-import cherry.core.dispatcher.dispatcher;
-import cherry.core.dispatcher.operation;
-import cherry.core.dispatcher.queue;
-import cherry.core.dispatcher.types;
+import cherry.core.threading.dispatcher;
+import cherry.core.threading.operation;
+import cherry.core.threading.queue;
+import cherry.core.threading.types;
 
     import core.thread : Thread;
     import core.atomic : atomicOp;

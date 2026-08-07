@@ -1,10 +1,10 @@
-module cherry.core.dispatcher.queue;
+module cherry.core.threading.queue;
 
 import core.atomic : atomicLoad, atomicStore;
 import core.sync.mutex : Mutex;
 
-import cherry.core.dispatcher.operation;
-import cherry.core.dispatcher.types;
+import cherry.core.threading.operation;
+import cherry.core.threading.types;
 
 /**
  * Class PriorityQueue represents a thread-safe Dispatcher queue. 
@@ -233,7 +233,7 @@ version (unittest)
     import core.atomic : atomicOp;
     import core.thread : Thread;
 
-    import cherry.core.dispatcher.testing;
+    import cherry.core.threading.testing;
 }
 
 // ---------------------------------------------------------------------------

@@ -8,8 +8,8 @@ module cherry.ui.testing;
 
 version (unittest):
 
-import cherry.core.dispatcher;
-import cherry.core.dispatcher.testing : releaseAmbientDispatcher;
+import cherry.core.threading;
+import cherry.core.threading.testing : releaseAmbientDispatcher;
 import cherry.platform;
 import cherry.ui.application;
 import cherry.ui.window;

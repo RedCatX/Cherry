@@ -1,8 +1,8 @@
-module cherry.core.dispatcher.frame;
+module cherry.core.threading.frame;
 
 import core.atomic : atomicLoad, atomicStore;
 
-import cherry.core.dispatcher.dispatcher;
+import cherry.core.threading.dispatcher;
 
 /**
  * A nested run of the dispatcher's message loop, with an exit condition of
@@ -98,8 +98,8 @@ version (unittest)
     import core.thread : Thread;
     import core.time : msecs;
 
-    import cherry.core.dispatcher.testing;
-    import cherry.core.dispatcher.types;
+    import cherry.core.threading.testing;
+    import cherry.core.threading.types;
 }
 
 unittest // a frame pumps its own work, returns, and the outer loop carries on

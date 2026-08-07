@@ -759,15 +759,15 @@
  <Folder name="cherry">
   <Folder name="cherry">
    <Folder name="core">
-    <Folder name="dispatcher">
-     <File path="cherry\core\dispatcher\dispatcher.d" />
-     <File path="cherry\core\dispatcher\frame.d" />
-     <File path="cherry\core\dispatcher\operation.d" />
-     <File path="cherry\core\dispatcher\package.d" />
-     <File path="cherry\core\dispatcher\queue.d" />
-     <File path="cherry\core\dispatcher\testing.d" />
-     <File path="cherry\core\dispatcher\timer.d" />
-     <File path="cherry\core\dispatcher\types.d" />
+    <Folder name="threading">
+     <File path="cherry\core\threading\dispatcher.d" />
+     <File path="cherry\core\threading\frame.d" />
+     <File path="cherry\core\threading\operation.d" />
+     <File path="cherry\core\threading\package.d" />
+     <File path="cherry\core\threading\queue.d" />
+     <File path="cherry\core\threading\testing.d" />
+     <File path="cherry\core\threading\timer.d" />
+     <File path="cherry\core\threading\types.d" />
     </Folder>
     <File path="cherry\core\application.d" />
     <File path="cherry\core\juice.d" />
