@@ -411,6 +411,17 @@ class Element : CherryObject
     */
     final void measure(Size availableSize)
     {
+        // Clean, and asked the same question as last time: the answer cannot
+        // have changed, so the subtree below is not asked again either.  This
+        // is what makes a layout pass cost the dirty part of the tree rather
+        // than the whole of it.
+        if (!_measureDirty && availableSize == _previousConstraint)
+            return;
+
+        // The question is recorded before it is answered, so that a measure
+        // reached again from inside measureOverride sees the one in flight.
+        _previousConstraint = availableSize;
+
         auto constraint = availableSize;
 
         if (isWidthSet)
@@ -437,6 +448,19 @@ class Element : CherryObject
     */
     final void arrange(Rect finalRect)
     {
+        // Clean, and into the same rectangle: nothing to do, children included.
+        //
+        // Both halves are needed.  "Clean" alone would skip an element being
+        // moved somewhere new, which is most of what arranging is; the same
+        // rectangle alone would skip one whose content changed underneath it.
+        //
+        // What makes this safe is that invalidateMeasure sets _arrangeDirty as
+        // well and measure() never clears it, so _measureDirty implies
+        // _arrangeDirty always holds: an element whose measure went stale
+        // cannot slip out of arrange at the rectangle it already had.
+        if (!_arrangeDirty && finalRect == _arrangedRect)
+            return;
+
         immutable previous = Size(actualWidth, actualHeight);
 
         _arrangedRect = finalRect;
@@ -444,6 +468,10 @@ class Element : CherryObject
 
         setValue(actualWidthKey,  Value(arranged.width));
         setValue(actualHeightKey, Value(arranged.height));
+
+        // Cleared before the event, so that a handler calling invalidateArrange
+        // is left invalid rather than having its request wiped out on the way
+        // out of the call it made it from.
         _arrangeDirty = false;
 
         if (arranged.width != previous.width || arranged.height != previous.height)
@@ -468,22 +496,54 @@ class Element : CherryObject
     }
 
    /**
-    * Marks the measured size as out of date.
-    *
-    * Nothing schedules a fresh pass yet: a window lays out when the platform
-    * hands it a size, and that is the whole of the layout there is to drive.
-    * The layout queue hooks in here when it arrives, and callers will not have
-    * to change.
+    * Whether the measured size is up to date.  False from the moment
+    * invalidateMeasure is called until a pass has answered it.
     */
-    void invalidateMeasure()
+    @property bool isMeasureValid() const pure nothrow @nogc
     {
-        _measureDirty = true;
-        _arrangeDirty = true;
+        return !_measureDirty;
     }
 
     /// ditto
+    @property bool isArrangeValid() const pure nothrow @nogc
+    {
+        return !_arrangeDirty;
+    }
+
+   /**
+    * Marks the measured size as out of date, and the placement with it: a size
+    * that has to be worked out again has to be placed again.
+    *
+    * Travels up the tree, because a child that may want a different size
+    * changes what its parent wants.  The walk stops at the first ancestor
+    * already marked -- whatever marked it walked the rest of the chain then --
+    * which is what keeps invalidating a whole subtree linear rather than
+    * quadratic.
+    */
+    void invalidateMeasure()
+    {
+        immutable wasDirty = _measureDirty;
+
+        if (!wasDirty)
+            _measureDirty = true;
+
+        invalidateArrange();
+
+        if (!wasDirty && _parent !is null)
+            _parent.invalidateMeasure();
+    }
+
+   /**
+    * Marks the placement as out of date, leaving the measured size alone.
+    *
+    * Unlike measure this does not travel: where a child ends up does not
+    * change where its parent is.
+    */
     void invalidateArrange()
     {
+        if (_arrangeDirty)
+            return;
+
         _arrangeDirty = true;
     }
 
@@ -541,6 +601,46 @@ protected:
     }
 
    /**
+    * Turns a property change into layout invalidation, as the property's
+    * metadata asked for.
+    *
+    * This is what the affectsMeasure family is for, and what makes
+    * `element.width = 200` mean something: the flags are declared once at
+    * registration and every element honours them, whichever module registered
+    * the property.
+    *
+    * Note that arrange() writes ActualWidth and ActualHeight and so arrives
+    * here on every pass.  Neither carries a flag, and neither may: a property
+    * written by arranging that invalidated arranging would never settle, and
+    * only the pass limit would catch it.
+    */
+    override void onPropertyChanged(immutable(Property) property,
+                                    ref immutable(PropertyMetadata) metadata,
+                                    const(Value) oldValue,
+                                    const(Value) newValue)
+    {
+        super.onPropertyChanged(property, metadata, oldValue, newValue);
+
+        // Measure subsumes arrange, so the cheaper request is only worth
+        // making when the dearer one was not.
+        if (metadata.affectsMeasure)
+            invalidateMeasure();
+        else if (metadata.affectsArrange)
+            invalidateArrange();
+
+        if (_parent !is null)
+        {
+            if (metadata.affectsParentMeasure)
+                _parent.invalidateMeasure();
+            else if (metadata.affectsParentArrange)
+                _parent.invalidateArrange();
+        }
+
+        // affectsRender waits for a render queue: there is nothing to ask for
+        // yet beyond what the platform already asks for on its own.
+    }
+
+   /**
     * Called on the element right after it has been added to a parent.
     * Inherited-property and style invalidation will hook in here later.
     */
@@ -553,6 +653,27 @@ protected:
     */
     void onDetached(Element oldParent)
     {
+    }
+
+   /**
+    * Measures this element when a pass has found it to be the topmost one whose
+    * measure is out of date, with nothing above it left to say how much room
+    * there is.
+    *
+    * The last question it was asked is the best answer available -- whatever
+    * space its parent offered before is the space it still has, or the parent
+    * would be out of date too and the pass would have started higher up.  A
+    * window, whose size is dictated from outside the tree, overrides this.
+    */
+    void measureAsRoot()
+    {
+        measure(_previousConstraint);
+    }
+
+    /// ditto
+    void arrangeAsRoot()
+    {
+        arrange(_arrangedRect);
     }
 
 private:
@@ -590,6 +711,10 @@ private:
     Element[]            _children;
     HandlerEntry[][uint] _handlers;
     Size                 _desiredSize;
+    // The availableSize the last measure that ran was given, as it arrived --
+    // before Width and Height are laid over it, since that is what the next
+    // caller's availableSize gets compared against.
+    Size                 _previousConstraint;
     Rect                 _arrangedRect;
     bool                 _measureDirty = true;
     bool                 _arrangeDirty = true;
@@ -1134,4 +1259,187 @@ unittest
     child.arrange(Rect(0, 0, 40, 40));
     assert(childSeen == 3, "the two parent passes that moved it, and this one");
     assert(parentSeen == parentBefore);
+}
+
+version (unittest)
+{
+   /*
+    * Counts the passes it is put through, which is how the tests below tell
+    * work that was done from work that was skipped.
+    */
+    private static class Counter : Element
+    {
+        int measures;
+        int arranges;
+
+        protected override Size measureOverride(Size availableSize)
+        {
+            measures++;
+            return super.measureOverride(availableSize);
+        }
+
+        protected override Size arrangeOverride(Size finalSize)
+        {
+            arranges++;
+            return super.arrangeOverride(finalSize);
+        }
+    }
+}
+
+unittest
+{
+    // Measuring is skipped when it is clean and the question has not changed,
+    // which is the whole economy of an incremental pass.
+    auto c = new Counter;
+
+    c.measure(Size(500, 400));
+    assert(c.measures == 1);
+
+    c.measure(Size(500, 400));
+    assert(c.measures == 1, "same question, same answer, nobody asked again");
+
+    // A different question has to be put, clean or not.
+    c.measure(Size(300, 400));
+    assert(c.measures == 2);
+
+    // And a dirty element answers again even to the question it just answered.
+    c.invalidateMeasure();
+    c.measure(Size(300, 400));
+    assert(c.measures == 3);
+}
+
+unittest
+{
+    // Arranging skips on the same terms, and both halves of the rule are load
+    // bearing: clean alone would refuse to move an element, the same rectangle
+    // alone would refuse to re-place one whose content changed.
+    auto c = new Counter;
+
+    c.arrange(Rect(0, 0, 200, 100));
+    assert(c.arranges == 1);
+
+    c.arrange(Rect(0, 0, 200, 100));
+    assert(c.arranges == 1, "clean, and nowhere new to go");
+
+    c.arrange(Rect(0, 0, 200, 130));
+    assert(c.arranges == 2, "clean, but somewhere new to go");
+
+    c.invalidateArrange();
+    c.arrange(Rect(0, 0, 200, 130));
+    assert(c.arranges == 3, "nowhere new to go, but something changed underneath");
+}
+
+unittest
+{
+    // Invalidating a measure travels up: a child that may want a different
+    // size changes what its parent wants.  Invalidating an arrange does not --
+    // where a child ends up does not move its parent.
+    auto root = new Element;
+    auto middle = new Element;
+    auto leaf = new Element;
+    root.addChild(middle);
+    middle.addChild(leaf);
+
+    root.measure(Size(500, 400));
+    root.arrange(Rect(0, 0, 500, 400));
+    assert(root.isMeasureValid && middle.isMeasureValid && leaf.isMeasureValid);
+    assert(root.isArrangeValid && middle.isArrangeValid && leaf.isArrangeValid);
+
+    leaf.invalidateMeasure();
+    assert(!leaf.isMeasureValid && !middle.isMeasureValid && !root.isMeasureValid);
+    assert(!leaf.isArrangeValid, "a size to work out again is a size to place again");
+    assert(!middle.isArrangeValid && !root.isArrangeValid);
+
+    root.measure(Size(500, 400));
+    root.arrange(Rect(0, 0, 500, 400));
+
+    leaf.invalidateArrange();
+    assert(!leaf.isArrangeValid);
+    assert(middle.isArrangeValid && root.isArrangeValid, "and it stops there");
+    assert(leaf.isMeasureValid, "the size it asked for is still the size it asks for");
+}
+
+unittest
+{
+    // The invariant the arrange skip rests on: measuring settles the size and
+    // nothing else, so an element that has been measured is still waiting to
+    // be placed.
+    auto e = new Element;
+    e.measure(Size(500, 400));
+
+    assert(e.isMeasureValid);
+    assert(!e.isArrangeValid, "measuring never says where anything goes");
+}
+
+unittest
+{
+    // What the affectsMeasure family is for: the flags are declared once at
+    // registration and every element honours them.
+    static class Flagged : Element
+    {
+        shared static this()
+        {
+            PropertyMetadata measureMeta;
+            measureMeta.defaultValue = Value(0);
+            measureMeta.affectsMeasure = true;
+
+            PropertyMetadata arrangeMeta;
+            arrangeMeta.defaultValue = Value(0);
+            arrangeMeta.affectsArrange = true;
+
+            PropertyMetadata plainMeta;
+            plainMeta.defaultValue = Value(0);
+
+            sizingProperty = Property.register("Sizing", getRtti!int(), getRtti!Flagged(), measureMeta);
+            placingProperty = Property.register("Placing", getRtti!int(), getRtti!Flagged(), arrangeMeta);
+            idleProperty = Property.register("Idle", getRtti!int(), getRtti!Flagged(), plainMeta);
+        }
+
+        static immutable(Property) sizingProperty;
+        static immutable(Property) placingProperty;
+        static immutable(Property) idleProperty;
+    }
+
+    auto parent = new Element;
+    auto e = new Flagged;
+    parent.addChild(e);
+
+    // Puts the pair back into a known clean state.  Both are invalidated
+    // first, because a clean parent stops at its own early-out and never
+    // reaches a dirty child -- which is exactly why a layout pass starts at
+    // the topmost element that is out of date rather than at the root.
+    void settle()
+    {
+        e.invalidateMeasure();
+        parent.measure(Size(500, 400));
+        parent.arrange(Rect(0, 0, 500, 400));
+        assert(parent.isMeasureValid && parent.isArrangeValid);
+        assert(e.isMeasureValid && e.isArrangeValid);
+    }
+
+    settle();
+    e.setValue(Flagged.sizingProperty, Value(1));
+    assert(!e.isMeasureValid && !e.isArrangeValid);
+    assert(!parent.isMeasureValid, "and the parent hears about it");
+
+    settle();
+    e.setValue(Flagged.placingProperty, Value(1));
+    assert(e.isMeasureValid, "placing it somewhere else does not resize it");
+    assert(!e.isArrangeValid);
+    assert(parent.isArrangeValid, "and its parent stays where it is");
+
+    settle();
+    e.setValue(Flagged.idleProperty, Value(1));
+    assert(e.isMeasureValid && e.isArrangeValid, "a property that claims nothing costs nothing");
+
+    // Width carries affectsMeasure, which is what makes assigning one mean
+    // something at all.
+    settle();
+    e.width = 200;
+    assert(!e.isMeasureValid && !parent.isMeasureValid);
+
+    // And so does taking it away again.
+    settle();
+    e.clearValue(Element.widthProperty);
+    assert(!e.isMeasureValid, "reverting a size is a size change like any other");
 }
