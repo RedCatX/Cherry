@@ -47,6 +47,46 @@ final class Widget : CherryObject
     static immutable(Property) strayProperty;
 }
 
+/**
+ * A subclass that watches the protected hook, so that it can be pinned down
+ * when it fires and where it sits relative to the metadata handlers.
+ */
+final class Watched : CherryObject
+{
+    shared static this()
+    {
+        PropertyMetadata meta;
+        meta.defaultValue = Value(0);
+        meta.onPropertyChanged ~= &recordHandler;
+
+        markProperty = Property.register("Mark", getRtti!int(), getRtti!Watched(), meta);
+    }
+
+    static immutable(Property) markProperty;
+
+protected:
+    override void onPropertyChanged(immutable(Property) property,
+                                    ref immutable(PropertyMetadata) metadata,
+                                    const(Value) oldValue,
+                                    const(Value) newValue)
+    {
+        changeLog ~= "hook";
+        hookOld = Value(oldValue);
+        hookNew = Value(newValue);
+        hookPropertyName = property.name;
+    }
+}
+
+private string[] changeLog;
+private Value hookOld;
+private Value hookNew;
+private string hookPropertyName;
+
+private void recordHandler(const(Object), const(Value), const(Value))
+{
+    changeLog ~= "handler";
+}
+
 private int widthChangedCount;
 
 private Value clampNonNegative(Object, Value v)
@@ -147,6 +187,31 @@ unittest
     w.clearValue(Widget.widthProperty);
     assert(widthChangedCount == 1);
     assert(!w.hasLocalValue(Widget.widthProperty));
+}
+
+unittest
+{
+    // The hook a layer above the property system hangs its own bookkeeping on.
+    auto w = new Watched;
+    changeLog = null;
+
+    w.setValue(Watched.markProperty, Value(7));
+
+    assert(changeLog == ["hook", "handler"],
+           "the framework settles its invariants before any handler looks");
+    assert(hookPropertyName == "Mark");
+    assert(hookOld.get!int == 0 && hookNew.get!int == 7);
+
+    // Only an effective change reaches it, on the same terms as the handlers.
+    changeLog = null;
+    w.setValue(Watched.markProperty, Value(7));
+    assert(changeLog == []);
+
+    // Including the change a clearValue makes.
+    changeLog = null;
+    w.clearValue(Watched.markProperty);
+    assert(changeLog == ["hook", "handler"]);
+    assert(hookOld.get!int == 7 && hookNew.get!int == 0);
 }
 
 unittest

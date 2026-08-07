@@ -160,6 +160,30 @@ protected:
         return null;
     }
 
+   /**
+    * Called when a property's effective value has changed, before the
+    * metadata's own change handlers run.
+    *
+    * The seam a layer above hooks its bookkeeping onto without the property
+    * system learning what that bookkeeping is: Element reads the layout flags
+    * here, and cherry.core stays free of anything in cherry.ui.
+    *
+    * It runs first so the framework has settled its own invariants -- the
+    * element marked dirty, the layout pass queued -- before any handler gets
+    * to look at the object.  A handler that reads a size is then reading one
+    * the framework already agrees with.
+    *
+    * The resolved metadata is handed over rather than looked up again:
+    * resolving walks the class hierarchy under the registry lock, and this is
+    * on the path of every property write.
+    */
+    void onPropertyChanged(immutable(Property) property,
+                           ref immutable(PropertyMetadata) metadata,
+                           const(Value) oldValue,
+                           const(Value) newValue)
+    {
+    }
+
 private:
    /*
     * The type rule in one place.  An empty Value fits any property: it is not
@@ -225,6 +249,7 @@ private:
                        Value oldValue,
                        Value newValue)
     {
+        onPropertyChanged(property, metadata, oldValue, newValue);
         metadata.raisePropertyChanged(this, oldValue, newValue);
     }
 
