@@ -360,7 +360,18 @@ private:
             setValue(heightProperty, Value(cast(float) height));
         }
 
-        performLayout(cast(float) width, cast(float) height);
+        // Width and Height carry affectsMeasure, so the assignments above have
+        // already marked this window and queued a pass.  It is run here rather
+        // than left to the queue because a resize arrives inside the platform's
+        // own message handling, and the frame showing the new size is the very
+        // next thing the platform will ask for.
+        //
+        // Going through the pass rather than laying out directly means the
+        // queued one is consumed instead of duplicated, that a resize which
+        // does not change the numbers -- Windows sends plenty -- costs nothing,
+        // and that anything else that went out of date since the last pass is
+        // settled in this one rather than in a second after the paint.
+        updateLayout();
     }
 
    /*
@@ -370,6 +381,23 @@ private:
     void performLayout(float width, float height)
     {
         measure(Size(width, height));
+        arrange(Rect(0, 0, width, height));
+    }
+
+   /*
+    * A window is the one element whose size is dictated from outside the tree,
+    * so it is the one for which the last question it was asked is not the best
+    * answer available.  Width and Height are, because handleResized keeps them
+    * truthful about what the platform granted.
+    */
+    public override void measureAsRoot()
+    {
+        measure(Size(width, height));
+    }
+
+    /// ditto
+    public override void arrangeAsRoot()
+    {
         arrange(Rect(0, 0, width, height));
     }
 
@@ -671,4 +699,114 @@ unittest // a closed window says so instead of working on a stale handle
     // Closing what is already closed is simply nothing to do.
     window.close();
     window.forceClose();
+}
+
+version (unittest)
+{
+    import cherry.core.threading.testing : pumpUntilIdle;
+    import cherry.ui.layout : LayoutManager;
+    import cherry.ui.testing : makeWindow, withApplication;
+}
+
+unittest
+{
+    // A brand new window is laid out, so an element added to one can be asked
+    // what size it came out at without waiting for the platform to say
+    // anything.
+    auto w = makeWindow();
+    assert(w.window.isMeasureValid && w.window.isArrangeValid);
+
+    auto child = new Element;
+    w.window.addChild(child);
+    w.window.updateLayout();
+
+    assert(child.actualWidth == 600 && child.actualHeight == 400);
+}
+
+unittest
+{
+    // A resize from the platform is settled on the spot.  It arrives inside
+    // the platform's own message handling and the frame showing the new size
+    // is the next thing the platform will ask for, so there is nothing to be
+    // gained by making it wait its turn.
+    auto w = makeWindow();
+    auto child = new Element;
+    w.window.addChild(child);
+    w.window.updateLayout();
+
+    w.platform.host.onResized(1024, 768);
+
+    assert(child.actualWidth == 1024 && child.actualHeight == 768,
+           "no pump, and the tree has already taken the new shape");
+    assert(w.window.width == 1024 && w.window.height == 768);
+}
+
+unittest
+{
+    // Setting the size from the application side queues a pass instead of
+    // laying out inline: nothing is waiting on the answer, and whatever else
+    // changes in this turn of the loop should be settled with it.
+    withApplication((app, loop) {
+        auto w = makeWindow();
+        auto child = new Element;
+        w.window.addChild(child);
+        w.window.updateLayout();
+
+        w.window.width = 800;
+
+        assert(!w.window.isMeasureValid, "marked, and not yet answered");
+        assert(child.actualWidth == 600, "still the size it was arranged at");
+        assert(LayoutManager.forDispatcher(app.dispatcher).isPassPending);
+
+        pumpUntilIdle(app.dispatcher);
+
+        assert(w.window.isMeasureValid && w.window.isArrangeValid);
+        assert(child.actualWidth == 800);
+    });
+}
+
+unittest
+{
+    // The whole round trip a real platform makes: the property pushes a size,
+    // the platform answers with the resize, and the tree is laid out -- with
+    // no pump, because the answer came back inside the assignment.
+    auto w = makeWindow();
+    auto child = new Element;
+    w.window.addChild(child);
+    w.window.updateLayout();
+
+    w.platform.echoResize = true;
+    auto pushesBefore = w.platform.sizePushes;
+
+    w.window.width = 800;
+
+    assert(child.actualWidth == 800);
+    assert(w.platform.sizePushes == pushesBefore + 1,
+           "the size that came back does not get pushed out again");
+}
+
+unittest
+{
+    // A resize to the size it already is costs nothing.  Windows sends plenty
+    // of those, and the old code laid the whole tree out for every one.
+    static class Counter : Element
+    {
+        int arranges;
+
+        protected override Size arrangeOverride(Size finalSize)
+        {
+            arranges++;
+            return super.arrangeOverride(finalSize);
+        }
+    }
+
+    auto w = makeWindow();
+    auto child = new Counter;
+    w.window.addChild(child);
+    w.window.updateLayout();
+
+    auto before = child.arranges;
+    w.platform.host.onResized(600, 400);
+
+    assert(child.arranges == before, "same numbers, nothing to work out");
 }

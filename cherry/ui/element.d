@@ -212,6 +212,14 @@ class Element : CherryObject
 
         _children = _children[0 .. index] ~ child ~ _children[index .. $];
         child._parent = this;
+
+        // Here rather than in onAttached: a subclass may override that hook and
+        // has no obligation to chain, and one that forgot would break layout
+        // for its whole subtree with nothing at the call site to show for it.
+        // What a tree does when it changes shape belongs to the tree.
+        invalidateMeasure();
+        child.invalidateMeasure();
+
         child.onAttached(this);
     }
 
@@ -235,6 +243,10 @@ class Element : CherryObject
         }
 
         child._parent = null;
+
+        invalidateMeasure();
+        child.markLayoutDirty();
+
         child.onDetached(this);
     }
 
@@ -246,9 +258,13 @@ class Element : CherryObject
         auto detached = _children;
         _children = null;
 
+        if (detached.length)
+            invalidateMeasure();
+
         foreach (child; detached)
         {
             child._parent = null;
+            child.markLayoutDirty();
             child.onDetached(this);
         }
     }
@@ -577,6 +593,29 @@ class Element : CherryObject
             manager.updateLayout();
     }
 
+   /**
+    * Measures this element as the top of a layout pass -- the highest one that
+    * is out of date, with nothing above it left to say how much room there is.
+    *
+    * The last question it was asked is the best answer available: whatever
+    * space its parent offered before is the space it still has, or the parent
+    * would be out of date too and the pass would have started higher up.
+    *
+    * An element whose size is dictated from outside the tree overrides this to
+    * say where its room really comes from.  Window does, because the platform
+    * tells it; a popup or an adorner layer would for the same reason.
+    */
+    void measureAsRoot()
+    {
+        measure(_previousConstraint);
+    }
+
+    /// ditto
+    void arrangeAsRoot()
+    {
+        arrange(_arrangedRect);
+    }
+
 protected:
    /**
     * Measures the content and reports the size it wants.  The default offers
@@ -685,27 +724,6 @@ protected:
     {
     }
 
-   /**
-    * Measures this element when a pass has found it to be the topmost one whose
-    * measure is out of date, with nothing above it left to say how much room
-    * there is.
-    *
-    * The last question it was asked is the best answer available -- whatever
-    * space its parent offered before is the space it still has, or the parent
-    * would be out of date too and the pass would have started higher up.  A
-    * window, whose size is dictated from outside the tree, overrides this.
-    */
-    package void measureAsRoot()
-    {
-        measure(_previousConstraint);
-    }
-
-    /// ditto
-    package void arrangeAsRoot()
-    {
-        arrange(_arrangedRect);
-    }
-
 private:
    /*
     * The layout pass this element belongs to, which is the one belonging to
@@ -714,6 +732,21 @@ private:
     LayoutManager layoutManager()
     {
         return LayoutManager.forDispatcher(dispatcher);
+    }
+
+   /*
+    * Marks an element that has just left the tree.
+    *
+    * The flags alone, with no queue entry: an element with no parent has no
+    * rectangle to be placed in and nothing to be measured against, so a pass
+    * has nowhere to put it.  Being marked is what makes it lay itself out
+    * properly when it joins a tree again -- and joining one invalidates the
+    * new parent, which is what brings the pass down to it.
+    */
+    void markLayoutDirty() pure nothrow @nogc
+    {
+        _measureDirty = true;
+        _arrangeDirty = true;
     }
 
    /*
@@ -1481,4 +1514,69 @@ unittest
     settle();
     e.clearValue(Element.widthProperty);
     assert(!e.isMeasureValid, "reverting a size is a size change like any other");
+}
+
+unittest
+{
+    // A tree that changes shape has to be laid out again: what a parent asks
+    // for is worked out from its children, so the set of them is an input.
+    auto parent = new Element;
+    auto first = new Element;
+    auto second = new Element;
+
+    void settle()
+    {
+        first.invalidateMeasure();
+        second.invalidateMeasure();
+        parent.invalidateMeasure();
+        parent.measure(Size(500, 400));
+        parent.arrange(Rect(0, 0, 500, 400));
+    }
+
+    parent.addChild(first);
+    settle();
+    assert(parent.isMeasureValid);
+
+    parent.addChild(second);
+    assert(!parent.isMeasureValid, "one more child to account for");
+    assert(!second.isMeasureValid, "and it has never been measured under this parent");
+
+    settle();
+    parent.removeChild(second);
+    assert(!parent.isMeasureValid, "one fewer");
+
+    settle();
+    parent.clearChildren();
+    assert(!parent.isMeasureValid);
+
+    // Clearing nothing changes nothing.
+    settle();
+    parent.clearChildren();
+    assert(parent.isMeasureValid);
+}
+
+unittest
+{
+    // An element that leaves the tree is marked, but has nowhere to be laid
+    // out until it joins one again -- and joining one is what brings a pass
+    // down to it.
+    auto parent = new Element;
+    auto child = new Element;
+    parent.addChild(child);
+
+    parent.measure(Size(500, 400));
+    parent.arrange(Rect(0, 0, 500, 400));
+    assert(child.isMeasureValid && child.isArrangeValid);
+
+    parent.removeChild(child);
+    assert(!child.isMeasureValid && !child.isArrangeValid);
+
+    // Back in, and measured again under whoever has it now.
+    auto adopter = new Element;
+    adopter.addChild(child);
+    adopter.measure(Size(120, 90));
+    adopter.arrange(Rect(0, 0, 120, 90));
+
+    assert(child.isMeasureValid && child.isArrangeValid);
+    assert(child.arrangedRect == Rect(0, 0, 120, 90));
 }

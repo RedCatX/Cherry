@@ -314,13 +314,20 @@ version (unittest)
     }
 
    /*
-    * Lays a tree out once and leaves everything up to date, so that what a
-    * test does next is the only thing the pass has to answer for.
+    * Lays a tree out once and leaves everything up to date with nothing
+    * queued, so that what a test does next is the only thing the pass has to
+    * answer for.
+    *
+    * The measure and arrange establish the constraint by hand, since a root
+    * with no parent would otherwise be sized against the nothing it was last
+    * offered; updateLayout then takes away the entries that building the tree
+    * put on the queue.
     */
     private void settle(Element root)
     {
         root.measure(Size(500, 400));
         root.arrange(Rect(0, 0, 500, 400));
+        root.updateLayout();
     }
 }
 

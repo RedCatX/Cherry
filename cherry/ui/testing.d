@@ -29,6 +29,15 @@ final class TestPlatformWindow : PlatformWindow
     int sizePushes;
     int invalidations;
 
+   /**
+    * Closes the loop the real platform closes: a size pushed to this fake
+    * comes back as the resize notification the OS would have sent.
+    *
+    * Off by default, because most tests want to watch what the window pushes
+    * without the answer coming back and changing what they are watching.
+    */
+    bool echoResize;
+
     this(PlatformWindowHost host)
     {
         this.host = host;
@@ -52,6 +61,9 @@ final class TestPlatformWindow : PlatformWindow
         width = w;
         height = h;
         sizePushes++;
+
+        if (echoResize)
+            host.onResized(w, h);
     }
 
     @property int clientWidth() { return width; }
