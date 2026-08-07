@@ -42,18 +42,28 @@ import cherry.ui.element;
  * the click that follows a resize sees a tree that has already taken its new
  * shape.  WPF puts layout on the same band for the same reason.
  */
-final class LayoutManager
+final class LayoutManager : DispatcherObject
 {
    /**
-    * The layout manager of a dispatcher, made on first use.
+    * The layout manager of the calling thread, made on first use.
     *
     * A dispatcher belongs to one thread and a thread hosts one dispatcher, so
-    * the slot is thread-local and needs no lock: everything that reaches it
-    * has already verified it is on the owning thread.
+    * the slot is thread-local and needs no lock: everything that reaches it is
+    * already on the owning thread.  Being a DispatcherObject is what makes
+    * that true rather than merely intended -- the manager binds to the
+    * dispatcher of the thread that built it and cannot be handed another.
+    *
+    * Null on a thread with no dispatcher, which is a thread with nothing to
+    * schedule a pass on.  That is not the same as asking for one: an object
+    * moving a property on its way out of a shutdown would otherwise raise a
+    * whole new dispatcher, message-only window and all, to record work that
+    * will never run.
     */
-    static LayoutManager forDispatcher(shared(Dispatcher) dispatcher)
+    static LayoutManager forCurrentThread()
     {
-        if (dispatcher is null)
+        auto current = Dispatcher.currentOrNull;
+
+        if (current is null)
             return null;
 
         // The identity check is not caution, it is the cleanup.  A dispatcher
@@ -63,8 +73,8 @@ final class LayoutManager
         // stale manager fall away on its own; subscribing to shutdown instead
         // would leave the dispatcher holding the manager, and the manager
         // holding whole element trees, for as long as it lived.
-        if (t_instance is null || t_instance._dispatcher !is dispatcher)
-            t_instance = new LayoutManager(dispatcher);
+        if (t_instance is null || t_instance.dispatcher !is current)
+            t_instance = new LayoutManager;
 
         return t_instance;
     }
@@ -193,11 +203,6 @@ package:
     }
 
 private:
-    this(shared(Dispatcher) dispatcher)
-    {
-        _dispatcher = dispatcher;
-    }
-
     void schedulePass()
     {
         // The pass under way will reach it before it ends.
@@ -206,7 +211,7 @@ private:
 
         // Posting onto a closed queue throws, and an object being taken down
         // has every right to move a property on its way out.
-        if (_dispatcher.hasShutdownStarted)
+        if (dispatcher.hasShutdownStarted)
             return;
 
         // One pass outstanding at a time: what it settles is everything dirty
@@ -214,7 +219,7 @@ private:
         if (_pending !is null && _pending.status == OperationStatus.pending)
             return;
 
-        _pending = _dispatcher.invokeAsync(&runPass, DispatcherPriority.render);
+        _pending = dispatcher.invokeAsync(&runPass, DispatcherPriority.render);
     }
 
     void runPass()
@@ -269,7 +274,6 @@ private:
     // Thread-local: one dispatcher per thread, so one manager per thread.
     static LayoutManager t_instance;
 
-    shared(Dispatcher)          _dispatcher;
     Element[]                   _measureQueue;
     Element[]                   _arrangeQueue;
     shared(DispatcherOperation) _pending;
@@ -344,7 +348,7 @@ unittest
         root.addChild(b);
         settle(root);
 
-        auto manager = LayoutManager.forDispatcher(d);
+        auto manager = LayoutManager.forCurrentThread();
         assert(!manager.isPassPending, "a settled tree asks for nothing");
 
         a.invalidateMeasure();
@@ -447,7 +451,7 @@ unittest
         settle(root);
 
         root.invalidateMeasure();
-        auto manager = LayoutManager.forDispatcher(d);
+        auto manager = LayoutManager.forCurrentThread();
         assert(manager.isPassPending);
 
         log = null;
@@ -475,7 +479,7 @@ unittest
         root.updateLayout();
 
         assert(log == []);
-        assert(!LayoutManager.forDispatcher(d).isPassPending);
+        assert(!LayoutManager.forCurrentThread().isPassPending);
     });
 }
 
@@ -541,7 +545,7 @@ unittest
 
         restless.invalidateArrange();
 
-        auto manager = LayoutManager.forDispatcher(d);
+        auto manager = LayoutManager.forCurrentThread();
         assertThrown!Exception(manager.updateLayout());
 
         // The queues were emptied before the throw, so the next call is not
@@ -572,7 +576,7 @@ unittest
         brittle.broken = false;
         settle(brittle);
 
-        auto manager = LayoutManager.forDispatcher(d);
+        auto manager = LayoutManager.forCurrentThread();
 
         brittle.broken = true;
         brittle.invalidateMeasure();
@@ -602,6 +606,25 @@ unittest
 
         root.invalidateMeasure();
         assert(!root.isMeasureValid, "it is marked, it just has nowhere to be settled");
+
+        // And no dispatcher was conjured to hold the news.  Asking for the
+        // manager through Dispatcher.current would have built a fresh one,
+        // message-only window and all, on the way out of a shutdown.
+        assert(LayoutManager.forCurrentThread() is null);
+        assert(Dispatcher.currentOrNull is null);
+    });
+}
+
+unittest
+{
+    // The manager belongs to the thread that built it and cannot be handed
+    // another dispatcher -- which is what being a DispatcherObject buys.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto manager = LayoutManager.forCurrentThread();
+
+        assert(manager.dispatcher is d);
+        manager.verifyAccess();
+        assert(manager.checkAccess());
     });
 }
 
@@ -611,15 +634,15 @@ unittest
     import core.thread : Thread;
 
     withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
-        auto here = LayoutManager.forDispatcher(d);
+        auto here = LayoutManager.forCurrentThread();
         assert(here !is null);
-        assert(LayoutManager.forDispatcher(d) is here, "and the same one every time");
+        assert(LayoutManager.forCurrentThread() is here, "and the same one every time");
 
         shared(LayoutManager) there;
 
         auto worker = new Thread({
             withDispatcher((shared(Dispatcher) other, ManualEventLoop otherLoop) {
-                there = cast(shared) LayoutManager.forDispatcher(other);
+                there = cast(shared) LayoutManager.forCurrentThread();
             });
         });
 
@@ -639,11 +662,11 @@ unittest
     LayoutManager first;
 
     withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
-        first = LayoutManager.forDispatcher(d);
+        first = LayoutManager.forCurrentThread();
     });
 
     withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
-        auto second = LayoutManager.forDispatcher(d);
+        auto second = LayoutManager.forCurrentThread();
         assert(second !is first, "the stale one fell away on its own");
     });
 }

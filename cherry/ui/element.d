@@ -731,7 +731,7 @@ private:
     */
     LayoutManager layoutManager()
     {
-        return LayoutManager.forDispatcher(dispatcher);
+        return LayoutManager.forCurrentThread();
     }
 
    /*

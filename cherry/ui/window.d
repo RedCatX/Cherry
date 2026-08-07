@@ -756,7 +756,7 @@ unittest
 
         assert(!w.window.isMeasureValid, "marked, and not yet answered");
         assert(child.actualWidth == 600, "still the size it was arranged at");
-        assert(LayoutManager.forDispatcher(app.dispatcher).isPassPending);
+        assert(LayoutManager.forCurrentThread().isPassPending);
 
         pumpUntilIdle(app.dispatcher);
 
