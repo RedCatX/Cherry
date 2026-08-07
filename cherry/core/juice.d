@@ -504,10 +504,10 @@ struct Parser(T)
     {
         Node.Type type;
 
-        bool isObject() { return _stack.back().type == Node.Type.object; } 
-        bool isProperty() { return _stack.back().type == Node.Type.property; }
-        bool isArray() { return _stack.back().type == Node.Type.array; }
-        bool isDictionary() { return _stack.back().type == Node.Type.dictionary; }
+        bool isObject() { return topNode().type == Node.Type.object; } 
+        bool isProperty() { return topNode().type == Node.Type.property; }
+        bool isArray() { return topNode().type == Node.Type.array; }
+        bool isDictionary() { return topNode().type == Node.Type.dictionary; }
 
         final switch (_evt) 
         {
@@ -544,7 +544,7 @@ struct Parser(T)
             case ParserEvent.endVersionBlock:
             case ParserEvent.endObject:
             case ParserEvent.endArray:
-                type = _stack.back().type;
+                type = topNode().type;
                 if (isArray() ||
                     isDictionary())
                 {
@@ -568,19 +568,19 @@ struct Parser(T)
                     else 
                     {
                         checkToken(Token.Type.rightSquareBracket);
-                        _stack.popBack();
+                        popNode();
                         _evt = ParserEvent.endArray;
                     }
                 }
                 else
                 {
-                    _stack.popBack();
+                    popNode();
                     if (_stack.empty())
                         _evt = ParserEvent.end;
                     else
                     {
                         if (isProperty())
-                            _stack.popBack();
+                            popNode();
 
                         if (testToken(Token.Type.comma) || 
                             type == Node.Type.versionBlock) 
@@ -598,7 +598,7 @@ struct Parser(T)
                                 if (isArray() || 
                                     isDictionary())
                                 {
-                                    _stack.popBack();
+                                    popNode();
                                     _evt = ParserEvent.endArray;
                                 }
                                 else
@@ -635,7 +635,7 @@ struct Parser(T)
                             if (isArray() ||
                                 isDictionary())
                             {
-                                _stack.popBack();
+                                popNode();
                                 _evt = ParserEvent.endArray;
                             }
                             else
@@ -658,7 +658,7 @@ struct Parser(T)
                     if (_evt == ParserEvent.value)
                     {
                         _evt = ParserEvent.key;
-                        _stack.back().type = Node.Type.dictionary;
+                        topNode().type = Node.Type.dictionary;
                     }
                     else
                         expected(peekToken().line, "`,`");
@@ -700,11 +700,49 @@ struct Parser(T)
         return _value;
     }
 
+    @property string file() const pure @safe nothrow
+	{
+        return _file;
+	}
+
+    @property uint line() const pure @safe nothrow
+	{
+        return _line;
+	}
+
 private:
     static if (is(T : const(char)[]))
         alias Char = char;
     else
         alias Char = Unqual!(ElementType!T);
+
+   /*
+    * Drops the innermost node.
+    *
+    * Written out rather than as `_stack.popBack()` because std.range's popBack
+    * leaves the array in a state CTFE will not append to afterwards: the next
+    * `_stack ~= node` fails with "cannot interpret at compile time", while the
+    * same slicing done here appends fine.  Every juice file parsed at compile
+    * time hits this the moment a second property follows the first.
+    */
+    void popNode()
+    {
+        _stack = _stack[0 .. $ - 1];
+    }
+
+   /*
+    * The innermost node, by reference.
+    *
+    * Also not std.range's back(): that one takes the array by value, so CTFE
+    * hands it a copy and a write through the returned ref lands in the copy and
+    * is lost -- silently, with no error and a correct answer at run time.  That
+    * is what made a dictionary parse as an array at compile time, since marking
+    * the node as a dictionary never took effect.
+    */
+    ref Node topNode() return
+    {
+        return _stack[$ - 1];
+    }
 
     void doError(string msg)
     {
@@ -1765,7 +1803,13 @@ private:
         if (!_nextToken.isNull)
         {
             _curToken = _nextToken.get;
-            _nextToken.nullify;
+            // Not nullify(): it goes through destroy(), which initialises the
+            // payload with emplaceInitializer, which for a zero-init type is a
+            // memset -- and memset has no source, so CTFE cannot run it.  Token
+            // is zero-init, so every juice file parsed at compile time would
+            // stop here.  (Nullable!Char survives only because char.init is
+            // 0xFF, which sends emplaceInitializer down its assignment branch.)
+            _nextToken = Nullable!Token.init;
         }
         else
             _curToken = getToken();
@@ -3406,4 +3450,108 @@ unittest
     assert(p.event == ParserEvent.endObject);
     p.next();
     assert(p.event == ParserEvent.end);
+}
+
+/**
+ * The D source that builds the components described by a juice file.
+ *
+ * Used as `mixin(LoadComponents!("mainwin.juice"));` -- a string mixin, not a
+ * template mixin.  What a juice file describes is assignments and statements,
+ * and a template mixin may only introduce declarations, so `mixin Load...!()`
+ * would report a basic type expected where the first property name stands.
+ * The file is read with `import`, so its directory must be on -J.
+ */
+template LoadComponents(string fileName)
+{
+    enum LoadComponents = juiceToD(import(fileName), fileName);
+}
+
+string juiceToD(string juice, string fileName)
+{
+    auto p = createParser(juice, 1, fileName);
+    assert(p.event == ParserEvent.ready, "Failed to parse " ~ fileName); 
+    p.next;
+    return translateJuice(p, true);
+}
+
+string translateJuice(ref Parser!string p, bool inRootObject = false)
+{
+    string result;
+
+    void writeLine(string text, uint line)
+    {
+        import std.conv : to;
+
+        result ~= `#line ` ~ to!string(line) ~ ` "` ~ p.file ~ `"` ~ "\r\n"
+			   ~ text ~ "\r\n";
+    }
+
+    while (p.event != ParserEvent.end)
+    {
+        switch (p.event)
+        {
+            case ParserEvent.startObject:
+                if (!inRootObject)
+				{
+                    writeLine(p.objectName ~ " = new " ~ p.objectType ~ "();", p.line);
+					writeLine("with (" ~ p.objectName ~ ") {", p.line);
+				}
+                p.next();
+                break;
+
+            case ParserEvent.property:
+                {
+                    string propertyName = p.property;
+                    uint line = p.line;
+                    p.next();
+                    if (p.event == ParserEvent.value)
+					{
+                        if (p.value.type == ValueToken.Type.integerLiteral ||
+                            p.value.type == ValueToken.Type.floatLiteral ||
+                            p.value.type == ValueToken.Type.stringLiteral ||
+                            p.value.type == ValueToken.Type.identifier ||
+                            p.value.type == ValueToken.Type._true ||
+                            p.value.type == ValueToken.Type._false ||
+                            p.value.type == ValueToken.Type._null)
+                        {
+                            writeLine(propertyName ~ " = " ~ p.value.text ~ ";", line);
+                        }
+                        else
+						{
+                            //binding,
+							//doubleBinding,
+							//expressionBinding,
+							//expression
+                            assert(false, "Not implemented yet");
+						}
+
+                        p.next();
+					}
+                    else if (p.event == ParserEvent.startObject)
+					{
+                        string objectName = p.objectName;
+                        result ~= translateJuice(p);
+                        writeLine(propertyName ~ " = " ~ objectName ~ ";", line);
+					}
+				}
+                break;
+
+            case ParserEvent.endObject:
+                // The nested call owns exactly one object, so it hands the
+                // parser back on its closing brace; only the root keeps going.
+                p.next();
+                if (!inRootObject)
+                {
+                    writeLine("}", p.line);
+                    return result;
+                }
+                break;
+
+            default:
+                assert(false, "Not implemented yet");
+                break;
+        }
+    }
+
+    return result;
 }

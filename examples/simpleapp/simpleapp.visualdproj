@@ -45,7 +45,7 @@
   <cov>0</cov>
   <nofloat>0</nofloat>
   <ignoreUnsupportedPragmas>0</ignoreUnsupportedPragmas>
-  <allinst>0</allinst>
+  <allinst>1</allinst>
   <stackStomp>0</stackStomp>
   <betterC>0</betterC>
   <dip25>0</dip25>
@@ -73,7 +73,7 @@
   <addDepImp>1</addDepImp>
   <program>$(DMDInstallDir)windows\bin\dmd.exe</program>
   <imppath>..\..\..\Cherry</imppath>
-  <fileImppath />
+  <fileImppath>.</fileImppath>
   <outdir>$(PlatformName)\$(ConfigurationName)</outdir>
   <objdir>$(OutDir)</objdir>
   <objname />
@@ -121,7 +121,7 @@
   <useStdLibPath>1</useStdLibPath>
   <cRuntime>2</cRuntime>
   <privatePhobos>0</privatePhobos>
-  <additionalOptions />
+  <additionalOptions>-J.</additionalOptions>
   <preBuildCommand />
   <postBuildCommand />
   <filesToClean>*.obj;*.cmd;*.build;*.json;*.dep;*.tlog</filesToClean>
@@ -171,7 +171,7 @@
   <cov>0</cov>
   <nofloat>0</nofloat>
   <ignoreUnsupportedPragmas>0</ignoreUnsupportedPragmas>
-  <allinst>0</allinst>
+  <allinst>1</allinst>
   <stackStomp>0</stackStomp>
   <betterC>0</betterC>
   <dip25>0</dip25>
@@ -199,7 +199,7 @@
   <addDepImp>1</addDepImp>
   <program>$(DMDInstallDir)windows\bin\dmd.exe</program>
   <imppath>..\..\..\Cherry</imppath>
-  <fileImppath />
+  <fileImppath>.</fileImppath>
   <outdir>$(PlatformName)\$(ConfigurationName)</outdir>
   <objdir>$(OutDir)</objdir>
   <objname />
@@ -247,7 +247,7 @@
   <useStdLibPath>1</useStdLibPath>
   <cRuntime>2</cRuntime>
   <privatePhobos>0</privatePhobos>
-  <additionalOptions />
+  <additionalOptions>-J.</additionalOptions>
   <preBuildCommand />
   <postBuildCommand />
   <filesToClean>*.obj;*.cmd;*.build;*.json;*.dep;*.tlog</filesToClean>
@@ -297,7 +297,7 @@
   <cov>0</cov>
   <nofloat>0</nofloat>
   <ignoreUnsupportedPragmas>0</ignoreUnsupportedPragmas>
-  <allinst>0</allinst>
+  <allinst>1</allinst>
   <stackStomp>0</stackStomp>
   <betterC>0</betterC>
   <dip25>0</dip25>
@@ -325,7 +325,7 @@
   <addDepImp>1</addDepImp>
   <program>$(DMDInstallDir)windows\bin\dmd.exe</program>
   <imppath>..\..\..\Cherry</imppath>
-  <fileImppath />
+  <fileImppath>.</fileImppath>
   <outdir>$(PlatformName)\$(ConfigurationName)</outdir>
   <objdir>$(OutDir)</objdir>
   <objname />
@@ -373,7 +373,7 @@
   <useStdLibPath>1</useStdLibPath>
   <cRuntime>2</cRuntime>
   <privatePhobos>0</privatePhobos>
-  <additionalOptions />
+  <additionalOptions>-J.</additionalOptions>
   <preBuildCommand />
   <postBuildCommand />
   <filesToClean>*.obj;*.cmd;*.build;*.json;*.dep;*.tlog</filesToClean>
@@ -423,7 +423,7 @@
   <cov>0</cov>
   <nofloat>0</nofloat>
   <ignoreUnsupportedPragmas>0</ignoreUnsupportedPragmas>
-  <allinst>0</allinst>
+  <allinst>1</allinst>
   <stackStomp>0</stackStomp>
   <betterC>0</betterC>
   <dip25>0</dip25>
@@ -451,7 +451,7 @@
   <addDepImp>1</addDepImp>
   <program>$(DMDInstallDir)windows\bin\dmd.exe</program>
   <imppath>..\..\..\Cherry</imppath>
-  <fileImppath />
+  <fileImppath>.</fileImppath>
   <outdir>$(PlatformName)\$(ConfigurationName)</outdir>
   <objdir>$(OutDir)</objdir>
   <objname />
@@ -499,7 +499,7 @@
   <useStdLibPath>1</useStdLibPath>
   <cRuntime>2</cRuntime>
   <privatePhobos>0</privatePhobos>
-  <additionalOptions />
+  <additionalOptions>-J.</additionalOptions>
   <preBuildCommand />
   <postBuildCommand />
   <filesToClean>*.obj;*.cmd;*.build;*.json;*.dep;*.tlog</filesToClean>

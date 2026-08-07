@@ -1,6 +1,9 @@
 module mainwin;
 
-import cherry.ui.window;
+import cherry.ui;
+import cherry.core;
+
+public MainWindow mainWindow;
 
 class MainWindow : Window
 {
@@ -11,6 +14,6 @@ class MainWindow : Window
 
     void initializeComponents()
     {
-        title = "Simple App";
+        mixin(LoadComponents!("mainwin.juice"));
     }
 }
