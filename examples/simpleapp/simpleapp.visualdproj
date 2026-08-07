@@ -110,7 +110,7 @@
   <mixinPath>$(IntDir)\$(SafeProjectName).mixin</mixinPath>
   <objfiles />
   <linkswitches />
-  <libfiles />
+  <libfiles>..\..\Win32\Debug\cherry.lib</libfiles>
   <libpaths />
   <deffile />
   <resfile />
@@ -236,7 +236,7 @@
   <mixinPath>$(IntDir)\$(SafeProjectName).mixin</mixinPath>
   <objfiles />
   <linkswitches />
-  <libfiles />
+  <libfiles>..\..\Win32\Release\cherry.lib</libfiles>
   <libpaths />
   <deffile />
   <resfile />
@@ -488,7 +488,7 @@
   <mixinPath>$(IntDir)\$(SafeProjectName).mixin</mixinPath>
   <objfiles />
   <linkswitches />
-  <libfiles />
+  <libfiles>..\..\x64\Release\cherry.lib</libfiles>
   <libpaths />
   <deffile />
   <resfile />
