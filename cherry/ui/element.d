@@ -687,14 +687,28 @@ class Element : CherryObject
 
    /**
     * Places the element in the rectangle the parent settled on and records the
-    * outcome in actualWidth and actualHeight.
+    * outcome in actualWidth, actualHeight and arrangedRect.
     *
-    * Raises onSizeChanged when that outcome differs from the last one, after
+    * The rectangle handed in is the slot, not the answer.  The margin comes
+    * out of it, the alignment decides where in what is left the element sits,
+    * and arrangedRect is where it ended up.  The slot is kept privately,
+    * because it and not the placement is what a second arrange has to be
+    * given.
+    *
+    * finalRect is always a real rectangle.  Unlike measure, arrange is never
+    * handed infinity: a place to be is not a question.
+    *
+    * Raises onSizeChanged when the outcome differs from the last one, after
     * the children have been arranged -- so a handler looks at a subtree that
     * has already taken its new shape, not one halfway there.
     */
     final void arrange(Rect finalRect)
-    {
+    in {
+        assert(finalRect.width < float.infinity && finalRect.height < float.infinity,
+               "arrange is given a place, and a place is never infinite.  A parent "
+               ~ "that wants to know how big a child would like asks measure instead.");
+    }
+    do {
         // Clean, and into the same rectangle: nothing to do, children included.
         //
         // Both halves are needed.  "Clean" alone would skip an element being
@@ -711,8 +725,46 @@ class Element : CherryObject
         immutable previous = Size(actualWidth, actualHeight);
 
         _arrangeSlot = finalRect;
-        _arrangedRect = finalRect;
-        immutable arranged = arrangeOverride(Size(finalRect.width, finalRect.height));
+
+        immutable m = margin;
+        immutable client = Size(notBelowZero(finalRect.width  - m.horizontal),
+                                notBelowZero(finalRect.height - m.vertical));
+
+        Size arrangeSize = client;
+
+        // A slot too small is not made to fit by squeezing.  The element takes
+        // the room it said it needed and overflows, which is visible and can be
+        // clipped later; a squeezed element is wrong and says nothing about it.
+        arrangeSize.width  = atLeast(arrangeSize.width,  _unclippedDesiredSize.width);
+        arrangeSize.height = atLeast(arrangeSize.height, _unclippedDesiredSize.height);
+
+        // Stretch is the only alignment that means "take the room".  Every
+        // other one means "take the size you asked for and sit somewhere in
+        // it" -- and the size it asked for is the unclipped one, because the
+        // clipped one is what the parent could spare rather than what was
+        // wanted.
+        if (horizontalAlignment != HorizontalAlignment.stretch)
+            arrangeSize.width = _unclippedDesiredSize.width;
+        if (verticalAlignment != VerticalAlignment.stretch)
+            arrangeSize.height = _unclippedDesiredSize.height;
+
+        immutable limits = MinMax(this);
+
+        // A maximum caps stretching; it does not cut the element below what its
+        // content needs.  A MaxWidth smaller than the content is a limit on how
+        // far the element may be pulled, not a promise to hide part of it.
+        arrangeSize.width  = atMost(arrangeSize.width,
+                                    atLeast(limits.maxWidth,  _unclippedDesiredSize.width));
+        arrangeSize.height = atMost(arrangeSize.height,
+                                    atLeast(limits.maxHeight, _unclippedDesiredSize.height));
+
+        immutable arranged = arrangeOverride(arrangeSize);
+
+        _arrangedRect = Rect(
+            finalRect.x + m.left + horizontalOffset(horizontalAlignment, client.width,  arranged.width),
+            finalRect.y + m.top  + verticalOffset(verticalAlignment,     client.height, arranged.height),
+            arranged.width,
+            arranged.height);
 
         setValue(actualWidthKey,  Value(arranged.width));
         setValue(actualHeightKey, Value(arranged.height));
@@ -985,6 +1037,44 @@ private:
     * minimum last, which is what makes a MinWidth of 300 beat a MaxWidth of
     * 100 instead of leaving a range nothing can satisfy.
     */
+   /*
+    * How far into the room the element starts.
+    *
+    * Stretch degenerates rather than being a fourth case.  An element bigger
+    * than the room cannot be stretched into it, and starting it at the near
+    * edge means what gets cut off is the far side rather than both; one that
+    * is smaller and still could not stretch -- because a width of its own or a
+    * maximum stopped it -- ends up centred, which is what the arithmetic below
+    * already says.
+    *
+    * Two functions rather than one because the two enums name their members
+    * differently, and matching them by ordinal instead is the kind of coupling
+    * that breaks in silence.  final switch makes a new member a compile error
+    * here rather than a wrong answer at run time.
+    */
+    static float horizontalOffset(HorizontalAlignment alignment, float room, float taken)
+    {
+        final switch (alignment)
+        {
+            case HorizontalAlignment.left:    return 0;
+            case HorizontalAlignment.center:  return (room - taken) * 0.5f;
+            case HorizontalAlignment.right:   return room - taken;
+            case HorizontalAlignment.stretch: return taken > room ? 0 : (room - taken) * 0.5f;
+        }
+    }
+
+    /// ditto
+    static float verticalOffset(VerticalAlignment alignment, float room, float taken)
+    {
+        final switch (alignment)
+        {
+            case VerticalAlignment.top:     return 0;
+            case VerticalAlignment.center:  return (room - taken) * 0.5f;
+            case VerticalAlignment.bottom:  return room - taken;
+            case VerticalAlignment.stretch: return taken > room ? 0 : (room - taken) * 0.5f;
+        }
+    }
+
     static struct MinMax
     {
         this(Element e)
@@ -2141,4 +2231,119 @@ unittest
     c.measure(Size(float.infinity, 400));
     c.measure(Size(float.infinity, 400));
     assert(c.measures == 1);
+}
+
+unittest
+{
+    // The margin insets the element inside the slot it was given, and what it
+    // reports as its size is what is left after the inset.
+    auto e = new Element;
+    e.margin = Thickness(10, 20, 30, 40);
+
+    e.measure(Size(500, 400));
+    e.arrange(Rect(0, 0, 500, 400));
+
+    assert(e.actualWidth == 460 && e.actualHeight == 340);
+    assert(e.arrangedRect == Rect(10, 20, 460, 340), "in by the left and top margins");
+}
+
+version (unittest)
+{
+    private Element aligned(float w, float h, HorizontalAlignment ha, VerticalAlignment va)
+    {
+        auto e = new Element;
+        e.width = w;
+        e.height = h;
+        e.horizontalAlignment = ha;
+        e.verticalAlignment = va;
+        return e;
+    }
+
+    private Rect place(Element e)
+    {
+        e.measure(Size(200, 100));
+        e.arrange(Rect(0, 0, 200, 100));
+        return e.arrangedRect;
+    }
+}
+
+unittest
+{
+    // Where each alignment puts an element that is smaller than its room.
+    assert(place(aligned(50, 20, HorizontalAlignment.left, VerticalAlignment.top))
+           == Rect(0, 0, 50, 20));
+    assert(place(aligned(50, 20, HorizontalAlignment.center, VerticalAlignment.center))
+           == Rect(75, 40, 50, 20));
+    assert(place(aligned(50, 20, HorizontalAlignment.right, VerticalAlignment.bottom))
+           == Rect(150, 80, 50, 20));
+
+    // The axes are independent.
+    assert(place(aligned(50, 20, HorizontalAlignment.right, VerticalAlignment.top))
+           == Rect(150, 0, 50, 20));
+
+    // Stretch with nothing to insist on takes the whole slot.
+    auto bare = new Element;
+    assert(place(bare) == Rect(0, 0, 200, 100));
+
+    // And stretch with a size of its own cannot stretch, so it centres.  This
+    // is the one a reader does not predict: a width of its own beats stretch,
+    // and what stretch does when it cannot stretch is put the element in the
+    // middle rather than in a corner.
+    assert(place(aligned(50, 20, HorizontalAlignment.stretch, VerticalAlignment.stretch))
+           == Rect(75, 40, 50, 20));
+}
+
+unittest
+{
+    // An element too big for its slot overflows it rather than being squeezed
+    // into it, and starts at the near corner so that what is cut off is the
+    // far side rather than both.
+    auto e = new Element;
+    e.width = 300;
+    e.height = 200;
+
+    e.measure(Size(100, 50));
+    assert(e.desiredSize == Size(100, 50), "the parent hears what it offered");
+    assert(e.unclippedDesiredSize == Size(300, 200), "arrange hears what was wanted");
+
+    e.arrange(Rect(0, 0, 100, 50));
+    assert(e.actualWidth == 300 && e.actualHeight == 200,
+           "arranged at what it needed, not at what fitted");
+    assert(e.arrangedRect == Rect(0, 0, 300, 200));
+}
+
+unittest
+{
+    // Re-arranging goes back to the slot, not to the placement.  Alignment
+    // carries affectsArrange, so re-arranging is exactly what changing one
+    // causes -- and passing the placement would walk a right-aligned element
+    // across its slot, one pass at a time, until it left the tree.
+    auto e = aligned(50, 20, HorizontalAlignment.right, VerticalAlignment.bottom);
+
+    e.measure(Size(200, 100));
+    e.arrange(Rect(0, 0, 200, 100));
+    assert(e.arrangedRect == Rect(150, 80, 50, 20));
+
+    foreach (_; 0 .. 3)
+    {
+        e.invalidateArrange();
+        e.arrangeAsRoot();
+        assert(e.arrangedRect == Rect(150, 80, 50, 20), "the same slot, so the same place");
+    }
+}
+
+unittest
+{
+    // And the early-out compares the slot too: an element offered the same
+    // slot twice is not arranged twice, however far from that slot's corner
+    // its alignment put it.
+    auto c = new Counter;
+    c.horizontalAlignment = HorizontalAlignment.right;
+
+    c.arrange(Rect(0, 0, 200, 100));
+    assert(c.arranges == 1);
+    assert(c.arrangedRect.x == 200, "nowhere near the slot's corner");
+
+    c.arrange(Rect(0, 0, 200, 100));
+    assert(c.arranges == 1);
 }
