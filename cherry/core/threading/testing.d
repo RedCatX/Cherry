@@ -51,8 +51,12 @@ import cherry.core.threading.types;
     /**
 	* Runs body with a dispatcher driven by the supplied loop, releasing the
 	* thread-local slot afterwards whatever happens.
+	*
+	* package(cherry) rather than package: anything built on the dispatcher
+	* needs a dispatcher it can step by hand to test against, and cherry.ui
+	* would otherwise have to keep a second copy of these.
 	*/
-    package void withDispatcher(EventLoop loop, scope void delegate(shared(Dispatcher)) body)
+    package(cherry) void withDispatcher(EventLoop loop, scope void delegate(shared(Dispatcher)) body)
     {
         releaseAmbientDispatcher();
 
@@ -77,14 +81,14 @@ import cherry.core.threading.types;
     }
 
     /// Convenience overload for the common ManualEventLoop case.
-    package void withDispatcher(scope void delegate(shared(Dispatcher), ManualEventLoop) body)
+    package(cherry) void withDispatcher(scope void delegate(shared(Dispatcher), ManualEventLoop) body)
     {
         auto loop = new ManualEventLoop;
         withDispatcher(loop, (shared(Dispatcher) d) { body(d, loop); });
     }
 
     /// Pumps the loop on this thread until something calls shutdown.
-    package void pump(shared(Dispatcher) d)
+    package(cherry) void pump(shared(Dispatcher) d)
     {
         (cast(Dispatcher) d).run();
     }
@@ -94,7 +98,7 @@ import cherry.core.threading.types;
 	* the lowest dispatchable band, so it runs only once all real work is
 	* done.  Valid only while isInputPending is false.
 	*/
-    package void pumpUntilIdle(shared(Dispatcher) d)
+    package(cherry) void pumpUntilIdle(shared(Dispatcher) d)
     {
         d.invokeAsync({ d.shutdown(); }, DispatcherPriority.systemIdle);
         pump(d);

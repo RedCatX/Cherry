@@ -7,6 +7,7 @@ import cherry.core.rtti;
 import cherry.core.value;
 import cherry.platform.render : DrawingContext, Rect, Size;
 import cherry.ui.event;
+import cherry.ui.layout : LayoutManager;
 
 /**
  * Base class for every node of the element tree.
@@ -523,12 +524,22 @@ class Element : CherryObject
     void invalidateMeasure()
     {
         immutable wasDirty = _measureDirty;
+        _measureDirty = true;
 
-        if (!wasDirty)
-            _measureDirty = true;
+        // Registered every time, not only on the way from valid to invalid.
+        // Being marked and being queued are two different things: a pass that
+        // failed leaves elements marked with nothing queued, and an element
+        // that could not put itself back would never be laid out again.  A
+        // repeat entry costs an array slot and is skipped in a comparison.
+        if (auto manager = layoutManager)
+            manager.enqueueMeasure(this);
 
         invalidateArrange();
 
+        // The walk up is what stays guarded: an ancestor already marked was
+        // walked past when it was marked, so stopping there keeps invalidating
+        // a subtree linear rather than quadratic.  Nothing is lost by it, since
+        // the pass climbs to the top of the marked chain before it starts.
         if (!wasDirty && _parent !is null)
             _parent.invalidateMeasure();
     }
@@ -541,10 +552,29 @@ class Element : CherryObject
     */
     void invalidateArrange()
     {
-        if (_arrangeDirty)
-            return;
-
         _arrangeDirty = true;
+
+        if (auto manager = layoutManager)
+            manager.enqueueArrange(this);
+    }
+
+   /**
+    * Settles whatever layout is outstanding now, instead of waiting for the
+    * pass the dispatcher has queued.
+    *
+    * Everything out of date on this thread is settled, not this element's
+    * subtree alone: an element cannot be sure of its own size while something
+    * above it is still undecided.
+    *
+    * Called from inside a pass this does nothing, because the pass it would
+    * start is the one it is being called from.
+    */
+    final void updateLayout()
+    {
+        verifyAccess();
+
+        if (auto manager = layoutManager)
+            manager.updateLayout();
     }
 
 protected:
@@ -665,18 +695,27 @@ protected:
     * would be out of date too and the pass would have started higher up.  A
     * window, whose size is dictated from outside the tree, overrides this.
     */
-    void measureAsRoot()
+    package void measureAsRoot()
     {
         measure(_previousConstraint);
     }
 
     /// ditto
-    void arrangeAsRoot()
+    package void arrangeAsRoot()
     {
         arrange(_arrangedRect);
     }
 
 private:
+   /*
+    * The layout pass this element belongs to, which is the one belonging to
+    * the dispatcher it is bound to.
+    */
+    LayoutManager layoutManager()
+    {
+        return LayoutManager.forDispatcher(dispatcher);
+    }
+
    /*
     * Invokes this element's own handlers for the args' event, respecting
     * the handled flag.  Iterates a snapshot of the handler list, so

@@ -800,6 +800,7 @@
     <File path="cherry\ui\element.d" />
     <File path="cherry\ui\event.d" />
     <File path="cherry\ui\input.d" />
+    <File path="cherry\ui\layout.d" />
     <File path="cherry\ui\package.d" />
     <File path="cherry\ui\window.d" />
    </Folder>
