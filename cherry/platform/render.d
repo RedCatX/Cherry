@@ -304,6 +304,140 @@ unittest
 }
 
 /**
+ * The transform stack a DrawingContext keeps: what is in effect now, and what
+ * to go back to.
+ *
+ * Every implementation of the model needs one and they would all be this, so
+ * here it is once -- and, more to the point, the composition in push is
+ * written down once.  That single line is the highest-risk statement in the
+ * whole of the drawing model: getting the order backwards looks almost right,
+ * because translations commute and translations are nearly all a layout ever
+ * pushes.
+ *
+ * `.init` is a valid empty stack at the identity, which is where a context
+ * begins a frame.
+ */
+struct TransformStack
+{
+    // Only ever a field of a context, so it is never copied -- but a copy
+    // would silently share the array, so it is not allowed to happen.
+    @disable this(this);
+
+   /**
+    * Enters a space expressed in the one currently in effect.
+    *
+    * A point p of the new space reaches the current one as `p * transform`,
+    * and the current one reaches the target as `* current`, so the composite
+    * is `transform * current` -- the new transform on the left.
+    */
+    void push(Matrix transform)
+    {
+        _saved ~= _current;
+        _current = transform * _current;
+    }
+
+   /**
+    * Goes back to the transform the matching push found.
+    *
+    * The previous value is kept rather than reached by undoing the push.  A
+    * transform with a zero scale has no inverse and must still be poppable,
+    * and an inverse would accumulate rounding all the way down a deep tree,
+    * so a leaf would sit fractionally away from where it belongs.
+    */
+    void pop()
+    in {
+        assert(_saved.length > 0, "popTransform without a matching pushTransform.");
+    }
+    do {
+        _current = _saved[$ - 1];
+        _saved = _saved[0 .. $ - 1];
+        _saved.assumeSafeAppend();
+    }
+
+    /// What maps the space being drawn in now to the target's own.
+    @property Matrix current() const pure nothrow @nogc
+    {
+        return _current;
+    }
+
+    /// How many pushes are outstanding.  Zero at the start and end of a frame.
+    @property size_t depth() const pure nothrow @nogc
+    {
+        return _saved.length;
+    }
+
+   /**
+    * Back to an empty stack at the identity, whatever the last frame left.
+    *
+    * assumeSafeAppend here and in pop is what keeps a settled frame from
+    * allocating: the array grows to the depth of the tree once and is reused
+    * for the life of the context.
+    */
+    void reset() nothrow
+    {
+        _current = Matrix.init;
+        _saved.length = 0;
+        _saved.assumeSafeAppend();
+    }
+
+private:
+    Matrix   _current;   // Matrix.init is the identity
+    Matrix[] _saved;
+}
+
+unittest
+{
+    TransformStack s;
+
+    assert(s.current == Matrix.identity);
+    assert(s.depth == 0);
+
+    s.push(Matrix.translation(10, 20));
+    assert(s.depth == 1);
+    assert(s.current.transform(Point(0, 0)) == Point(10, 20));
+
+    // The inner push is expressed in the space the outer one entered.
+    s.push(Matrix.translation(5, 5));
+    assert(s.current.transform(Point(0, 0)) == Point(15, 25));
+
+    s.pop();
+    assert(s.current == Matrix.translation(10, 20), "exactly what it was, not something reconstructed");
+
+    s.pop();
+    assert(s.current == Matrix.identity);
+    assert(s.depth == 0);
+}
+
+unittest
+{
+    // Popping goes back to a value that was kept, which is why a transform
+    // with no inverse is still poppable.  An implementation that undid the
+    // push by multiplying through an inverse cannot pass this.
+    TransformStack s;
+
+    s.push(Matrix.translation(3, 7));
+    s.push(Matrix.scaling(0, 0));
+
+    s.pop();
+    assert(s.current == Matrix.translation(3, 7));
+}
+
+unittest
+{
+    // Whatever a frame left behind, the next one starts clean.
+    TransformStack s;
+
+    s.push(Matrix.translation(1, 1));
+    s.push(Matrix.scaling(2, 2));
+    s.push(Matrix.rotation(90));
+    assert(s.depth == 3);
+
+    s.reset();
+    assert(s.depth == 0);
+    assert(s.current == Matrix.identity);
+}
+
+/**
  * The surface elements draw onto during a frame.  Solid colors only for
  * now; brush objects, transforms, clips and text join the model as the
  * framework grows.
