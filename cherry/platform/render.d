@@ -39,6 +39,79 @@ struct Size
     float height = 0;
 }
 
+/**
+ * An inset on each of the four sides of a rectangle: what an element keeps
+ * clear around itself, and later what a border measures.
+ *
+ * Unlike Point, Size and Rect this one has constructors, so it has no implicit
+ * field-wise literal -- and the shorthand reads differently from its
+ * neighbours': `Thickness(4, 8)` is four left and right, eight top and bottom,
+ * where `Rect(4, 8)` would be x and y.  The two-argument form is the one
+ * people reach for and is worth the asymmetry, but it is worth knowing about.
+ *
+ * Equality is the compiler's, field by field, which is what user code wants.
+ * The property system does not use it: a struct-typed Value is compared byte
+ * for byte (see valueEquals in cherry.core.value), so an opEquals here would
+ * have no say in whether assigning a margin counts as a change, and writing
+ * one would only suggest otherwise.
+ */
+struct Thickness
+{
+    float left = 0;
+    float top = 0;
+    float right = 0;
+    float bottom = 0;
+
+    /// The same amount on every side.
+    this(float uniform) pure nothrow @nogc
+    {
+        left = top = right = bottom = uniform;
+    }
+
+    /// One amount left and right, another top and bottom.
+    this(float horizontal, float vertical) pure nothrow @nogc
+    {
+        left = right = horizontal;
+        top = bottom = vertical;
+    }
+
+    /// Each side its own, in the order they are named.
+    this(float left, float top, float right, float bottom) pure nothrow @nogc
+    {
+        this.left = left;
+        this.top = top;
+        this.right = right;
+        this.bottom = bottom;
+    }
+
+   /**
+    * The width an element gives away to its margin, and the height.
+    *
+    * The sizing pass asks for these two and never for the four sides: what it
+    * takes out of the space on offer, and what it puts back onto the answer,
+    * is a pair of totals.  Only the placing pass cares which side is which.
+    */
+    @property float horizontal() pure const nothrow @nogc { return left + right; }
+
+    /// ditto
+    @property float vertical() pure const nothrow @nogc { return top + bottom; }
+}
+
+unittest
+{
+    // The three ways to say a thickness, and the two sums layout asks for.
+    assert(Thickness(5) == Thickness(5, 5, 5, 5));
+    assert(Thickness(10, 20) == Thickness(10, 20, 10, 20),
+           "horizontal first and then vertical -- not left and then top");
+
+    immutable t = Thickness(1, 2, 3, 4);
+    assert(t.left == 1 && t.top == 2 && t.right == 3 && t.bottom == 4);
+    assert(t.horizontal == 4 && t.vertical == 6);
+
+    assert(Thickness.init == Thickness(0),
+           "nothing around it, which is what an element has until told otherwise");
+}
+
 /// An axis-aligned rectangle: origin plus size.
 struct Rect
 {
