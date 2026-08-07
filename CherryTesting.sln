@@ -1,9 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
-VisualStudioVersion = 18.8.12023.21 stable
+VisualStudioVersion = 18.8.12023.21
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{002A2DE9-8BB6-484D-9802-7E4AD4084715}") = "CherryTesting", "CherryTesting.visualdproj", "{08E13649-26CA-405F-8743-FE83BD1D0672}"
+Project("{002A2DE9-8BB6-484D-9802-7E4AD4084715}") = "cherry", "CherryTesting.visualdproj", "{08E13649-26CA-405F-8743-FE83BD1D0672}"
 EndProject
 Project("{002A2DE9-8BB6-484D-9802-7E4AD4084715}") = "simpleapp", "examples\simpleapp\simpleapp.visualdproj", "{119BD517-2C7A-4183-9C84-EC5D5E66D68F}"
 EndProject
@@ -13,6 +13,8 @@ Global
 		Debug|x86 = Debug|x86
 		Release|x64 = Release|x64
 		Release|x86 = Release|x86
+		Tests|x64 = Tests|x64
+		Tests|x86 = Tests|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{08E13649-26CA-405F-8743-FE83BD1D0672}.Debug|x64.ActiveCfg = Debug|x64
@@ -23,6 +25,10 @@ Global
 		{08E13649-26CA-405F-8743-FE83BD1D0672}.Release|x64.Build.0 = Release|x64
 		{08E13649-26CA-405F-8743-FE83BD1D0672}.Release|x86.ActiveCfg = Release|Win32
 		{08E13649-26CA-405F-8743-FE83BD1D0672}.Release|x86.Build.0 = Release|Win32
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Tests|x64.ActiveCfg = Tests|x64
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Tests|x64.Build.0 = Tests|x64
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Tests|x86.ActiveCfg = Tests|Win32
+		{08E13649-26CA-405F-8743-FE83BD1D0672}.Tests|x86.Build.0 = Tests|Win32
 		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Debug|x64.ActiveCfg = Debug|x64
 		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Debug|x64.Build.0 = Debug|x64
 		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Debug|x86.ActiveCfg = Debug|Win32
@@ -31,6 +37,10 @@ Global
 		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Release|x64.Build.0 = Release|x64
 		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Release|x86.ActiveCfg = Release|Win32
 		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Release|x86.Build.0 = Release|Win32
+		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Tests|x64.ActiveCfg = Release|x64
+		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Tests|x64.Build.0 = Release|x64
+		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Tests|x86.ActiveCfg = Release|Win32
+		{119BD517-2C7A-4183-9C84-EC5D5E66D68F}.Tests|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
