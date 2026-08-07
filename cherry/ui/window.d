@@ -863,3 +863,72 @@ unittest
     assert(child.actualWidth == 1000, "laid out at the minimum");
     assert(w.platform.width == 600, "and the native window was left where it was");
 }
+
+version (unittest)
+{
+    import cherry.platform.render : RecordingContext;
+
+   /// Draws its own bounds, so a test can read back where they landed.
+    private static class RenderMarker : Element
+    {
+        protected override void onRender(DrawingContext context)
+        {
+            context.fillRectangle(Rect(0, 0, actualWidth, actualHeight), Color.black);
+        }
+    }
+}
+
+unittest
+{
+    // A margin on a window costs nothing, drawing included.
+    //
+    // arrangeAsRoot passes a deliberately negative origin to cancel the
+    // margin, and the arithmetic looks alarming: -m.left + m.left + 0 == 0.
+    // Until now nothing rendered through arrangedRect, so a mistake there
+    // would have been invisible to the whole suite.
+    auto w = makeWindow();
+    auto child = new RenderMarker;
+    w.window.addChild(child);
+    w.window.updateLayout();
+
+    auto plain = new RecordingContext;
+    w.window.renderSubtree(plain);
+    assert(plain.entries[0].rect == Rect(0, 0, 600, 400));
+
+    w.window.margin = Thickness(10);
+    w.window.updateLayout();
+    assert(w.window.arrangedRect == Rect(0, 0, 600, 400));
+
+    auto margined = new RecordingContext;
+    w.window.renderSubtree(margined);
+    assert(margined.entries[0].rect == plain.entries[0].rect);
+    assert(margined.depth == 0);
+}
+
+unittest
+{
+    // An edge this change makes visible for the first time, recorded so that
+    // whoever meets it finds an explanation rather than a mystery.
+    //
+    // The margin cancellation does not cover an alignment other than stretch
+    // combined with a size the client area cannot satisfy.  A minimum of 1000
+    // in a 600-wide window aligned right is asked to sit 400 to the left of
+    // the origin, so the tree draws off the left edge.  That is not the
+    // window origin misbehaving -- it is alignment doing exactly what
+    // alignment means, and arrangedRect has said so since it was written.
+    // Only now does anything read it.
+    auto w = makeWindow();
+    auto child = new RenderMarker;
+    w.window.addChild(child);
+    w.window.updateLayout();
+
+    w.window.minWidth = 1000;
+    w.window.horizontalAlignment = HorizontalAlignment.right;
+    w.window.updateLayout();
+
+    assert(w.window.arrangedRect.x == -400);
+
+    auto ctx = new RecordingContext;
+    w.window.renderSubtree(ctx);
+    assert(ctx.entries[0].rect == Rect(-400, 0, 1000, 400));
+}
