@@ -23,11 +23,18 @@ docs/
 # Code coverage
 *.lst
 
-# VS
+# VS.  Anchored to where Visual D actually writes -- a project root -- and
+# restricted to directories.  Unanchored, "Win32" also matches the source
+# directory cherry/platform/win32, because git compares these without regard
+# to case on Windows; the files already tracked there are safe, but a new one
+# would have been ignored without a word.
 .vs
-x86
-x64
-Win32
+/x86/
+/x64/
+/Win32/
+examples/*/x86/
+examples/*/x64/
+examples/*/Win32/
 
 
 # Build output
