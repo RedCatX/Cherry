@@ -80,12 +80,6 @@ void main()
 
     window.addChild(stripes);
 
-    // Settled here rather than left to the queue, because a layout pass does
-    // not yet ask for a repaint: if the first WM_PAINT arrived before the
-    // queued pass ran, it would paint an unlaid-out tree and nothing would
-    // ever tell it to try again.  When there is a render queue this line goes.
-    window.updateLayout();
-
     window.onMouseDown ~= (Element sender, RoutedEventArgs args) {
         auto mouse = cast(MouseEventArgs) args;
         writefln("mouse %s down at (%s, %s)", mouse.button, mouse.x, mouse.y);
