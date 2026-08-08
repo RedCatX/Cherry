@@ -796,6 +796,10 @@
     <File path="cherry\platform\window.d" />
    </Folder>
    <Folder name="ui">
+    <Folder name="controls">
+     <File path="cherry\ui\controls\package.d" />
+     <File path="cherry\ui\controls\stackpanel.d" />
+    </Folder>
     <File path="cherry\ui\application.d" />
     <File path="cherry\ui\element.d" />
     <File path="cherry\ui\event.d" />
