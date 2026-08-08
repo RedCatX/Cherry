@@ -1172,9 +1172,13 @@ protected:
     * the property.
     *
     * Note that arrange() writes ActualWidth and ActualHeight and so arrives
-    * here on every pass.  Neither carries a flag, and neither may: a property
+    * here on every pass.  Neither carries a flag, and neither may.  A property
     * written by arranging that invalidated arranging would never settle, and
-    * only the pass limit would catch it.
+    * only the pass limit would catch it; affectsRender on either would be
+    * quieter and no better -- it would re-arm the render queue from inside
+    * the pass on every frame that changed a size, bypassing the check on the
+    * rectangle actually having moved, and the coalescing would never get a
+    * turn.
     */
     override void onPropertyChanged(immutable(Property) property,
                                     ref immutable(PropertyMetadata) metadata,
@@ -1198,8 +1202,12 @@ protected:
                 _parent.invalidateArrange();
         }
 
-        // affectsRender waits for a render queue: there is nothing to ask for
-        // yet beyond what the platform already asks for on its own.
+        // Independent of the two above rather than another else-if.  Measure
+        // subsumes arrange because working a size out again means placing it
+        // again, but neither implies redrawing at the level of a flag, and a
+        // property is entitled to claim both honestly.
+        if (metadata.affectsRender)
+            invalidateVisual();
     }
 
    /**
@@ -2781,4 +2789,47 @@ unittest
 
     assert(orphan.root is orphan);
     assert(orphan.toRootSpace(Rect(1, 2, 5, 5)) == Rect(8, 11, 5, 5));
+}
+
+unittest
+{
+    // A property that says it affects rendering gets a repaint asked for, and
+    // nothing else: it is not a size and it is not a place.
+    //
+    // No property in the framework carries this flag today, and that is the
+    // answer rather than an oversight -- everything visible that the sizing
+    // and alignment properties change moves the element, and arranging asks
+    // for the repaint itself under a check the flag would not have.  The flag
+    // is wired for the first property that genuinely needs it: a Background,
+    // a Foreground, an Opacity, the day brushes exist.
+    static class Painted : Element
+    {
+        shared static this()
+        {
+            PropertyMetadata renderMeta;
+            renderMeta.defaultValue = Value(0);
+            renderMeta.affectsRender = true;
+
+            shadeProperty = Property.register("Shade", getRtti!int(), getRtti!Painted(), renderMeta);
+        }
+
+        static immutable(Property) shadeProperty;
+    }
+
+    auto parent = new Element;
+    auto e = new Painted;
+    parent.addChild(e);
+
+    parent.measure(Size(500, 400));
+    parent.arrange(Rect(0, 0, 500, 400));
+    e.invalidateVisual();
+    parent.updateLayout();
+    assert(e.isMeasureValid && e.isArrangeValid && e.isVisualValid);
+
+    e.setValue(Painted.shadeProperty, Value(1));
+
+    assert(!e.isVisualValid, "it said it would look different, and it is taken at its word");
+    assert(e.isMeasureValid, "but it is the same size");
+    assert(e.isArrangeValid, "and in the same place");
+    assert(parent.isVisualValid, "and its parent did not change at all");
 }
