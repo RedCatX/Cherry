@@ -159,10 +159,19 @@ class Window : Element
     }
 
    /**
-    * Schedules a repaint of the window content.
+    * Schedules a repaint of the whole window content.
+    *
+    * Silent on a window that has been closed, rather than throwing the way
+    * show() and hide() do.  Those are asked to do something; this one is told
+    * something needs redrawing, and on a window that is gone the honest
+    * answer is that there is nothing to do -- not that the caller erred.  A
+    * handler running from onClosed has every right to touch the tree.
     */
     void invalidate()
     {
+        if (_destroyed)
+            return;
+
         _platform.invalidate();
     }
 
@@ -415,6 +424,23 @@ private:
     {
         immutable m = margin;
         arrange(Rect(-m.left, -m.top, width + m.horizontal, height + m.vertical));
+    }
+
+   /*
+    * The window is a surface, so a repaint asked of the tree stops here and
+    * becomes a repaint asked of the platform.
+    *
+    * Silent on a destroyed window rather than throwing: this runs inside a
+    * layout pass, and a throw would take that pass down for every other
+    * window on the dispatcher and trip its scope(failure).  One closed window
+    * is not grounds for losing everyone else's frame.
+    */
+    public override void repaintAsRoot(Rect region)
+    {
+        if (_destroyed)
+            return;
+
+        _platform.invalidate(region);
     }
 
     static void titleChanged(const(Object) obj, const(Value) oldValue, const(Value) newValue)
