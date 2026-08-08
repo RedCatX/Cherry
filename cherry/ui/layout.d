@@ -1081,3 +1081,77 @@ unittest
         assert(LayoutManager.forCurrentThread() is null);
     });
 }
+
+unittest
+{
+    // An element that moved is asked for twice over: where it went, and where
+    // it was.  Without the second, it would stay on the screen in both places.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto child = new Element;
+        surface.addChild(child);
+
+        child.width = 50;
+        child.height = 20;
+        child.horizontalAlignment = HorizontalAlignment.left;
+        child.verticalAlignment = VerticalAlignment.top;
+
+        settle(surface);
+        assert(child.arrangedRect == Rect(0, 0, 50, 20));
+        surface.repaints = null;
+
+        child.horizontalAlignment = HorizontalAlignment.right;
+        surface.updateLayout();
+
+        assert(child.arrangedRect == Rect(450, 0, 50, 20));
+        assert(surface.repaints.length == 1);
+        assert(surface.repaints[0] == Rect(0, 0, 500, 20),
+               "from where it was to where it went, in one region");
+    });
+}
+
+unittest
+{
+    // Arranging something back where it already was asks for nothing.  This
+    // is what stops the queue from being busy on every frame.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto child = new Element;
+        surface.addChild(child);
+
+        settle(surface);
+        surface.repaints = null;
+
+        child.invalidateArrange();
+        surface.updateLayout();
+
+        assert(child.isArrangeValid, "it was arranged");
+        assert(surface.repaints.length == 0, "and it landed where it already was");
+    });
+}
+
+unittest
+{
+    // arrange() writes ActualWidth and ActualHeight through the property
+    // system, so onPropertyChanged fires on every pass that changes a size.
+    // Neither carries affectsRender, and this is what would go wrong if one
+    // ever did: the queue would re-arm from inside the pass, every frame.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto child = new Element;
+        surface.addChild(child);
+
+        settle(surface);
+        surface.repaints = null;
+
+        // A real change of size, which does move the child.
+        child.width = 120;
+        child.height = 60;
+        surface.updateLayout();
+        assert(surface.repaints.length == 1);
+
+        surface.repaints = null;
+        surface.updateLayout();
+        assert(surface.repaints.length == 0, "and then it is quiet");
+    });
+}

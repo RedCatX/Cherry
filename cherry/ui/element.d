@@ -780,6 +780,8 @@ class Element : CherryObject
 
         immutable arranged = arrangeOverride(arrangeSize);
 
+        immutable vacated = _arrangedRect;
+
         _arrangedRect = Rect(
             finalRect.x + m.left + horizontalOffset(horizontalAlignment, client.width,  arranged.width),
             finalRect.y + m.top  + verticalOffset(verticalAlignment,     client.height, arranged.height),
@@ -793,6 +795,22 @@ class Element : CherryObject
         // is left invalid rather than having its request wiped out on the way
         // out of the call it made it from.
         _arrangeDirty = false;
+
+        // An element that ended up somewhere new has to be drawn there, and
+        // the place it left has to be drawn without it -- otherwise it stays
+        // on the screen twice.  Guarded on the rectangle actually changing:
+        // a pass that put it back where it was has nothing to repaint, and
+        // asking anyway would keep the queue busy every frame.
+        //
+        // The vacated region is asked of the parent, because it is expressed
+        // in the parent's coordinate space -- which is what arrangedRect is.
+        if (_arrangedRect != vacated)
+        {
+            invalidateVisual();
+
+            if (_parent !is null && !vacated.empty)
+                _parent.invalidateVisual(vacated);
+        }
 
         if (arranged.width != previous.width || arranged.height != previous.height)
             raiseEvent(new SizeChangedEventArgs(sizeChangedEvent, previous, arranged));
