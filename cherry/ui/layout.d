@@ -26,6 +26,7 @@ module cherry.ui.layout;
  */
 
 import cherry.core.threading;
+import cherry.platform.render : Rect;
 import cherry.ui.element;
 
 /**
@@ -162,6 +163,20 @@ final class LayoutManager : DispatcherObject
             // An arrange that invalidated a measure is picked up by the next
             // turn of this loop, with the measure queue drained again first.
         }
+
+        // Everything now has a size and a place; the surfaces are told which
+        // parts of them changed.  One pass in this order is what makes "laid
+        // out, then repainted" true by construction rather than by whoever
+        // remembered to do both.
+        //
+        // After the loop and not inside it, and deliberately after the
+        // scope(failure) above: a pass that threw leaves the tree half
+        // arranged -- some elements placed, some not -- and asking a window to
+        // repaint that is asking it to show half a frame.  The elements keep
+        // their marks, because only a successful drain clears them, so the
+        // next invalidation brings them back.  What is lost is one repaint,
+        // not a window.
+        flushVisuals();
     }
 
    /**
@@ -202,6 +217,28 @@ package:
         schedulePass();
     }
 
+   /*
+    * Records an element that has to be drawn again, either all of it -- which
+    * the pass reads off its renderBounds when it gets there, so an element
+    * may still change its mind -- or one region of it named now.
+    */
+    void enqueueVisual(Element element)
+    {
+        element.verifyAccess();
+
+        _visualQueue ~= VisualRequest(element, Rect.init, false);
+        schedulePass();
+    }
+
+    /// ditto
+    void enqueueVisual(Element element, Rect region)
+    {
+        element.verifyAccess();
+
+        _visualQueue ~= VisualRequest(element, region, true);
+        schedulePass();
+    }
+
 private:
     void schedulePass()
     {
@@ -232,6 +269,86 @@ private:
     {
         _measureQueue = null;
         _arrangeQueue = null;
+        _visualQueue = null;
+    }
+
+   /*
+    * Turns the outstanding repaint requests into one ask per surface.
+    *
+    * A counted loop rather than a single sweep, because renderBounds is
+    * element code and may invalidate again -- and schedulePass() will not
+    * help there.  It bails while a pass is running on the grounds that the
+    * pass will reach the work before it ends, which is true of the measure
+    * and arrange queues, whose loop re-checks, and false of anything appended
+    * after this drain has taken its snapshot.
+    */
+    void flushVisuals()
+    {
+        int flushes;
+
+        while (_visualQueue.length)
+        {
+            if (++flushes > maxTurns)
+            {
+                discardQueues();
+
+                throw new Exception(
+                    "The render queue did not settle: something asked for a "
+                    ~ "repaint again on every turn.  A renderBounds that "
+                    ~ "invalidates is the usual cause.");
+            }
+
+            auto batch = _visualQueue;
+            _visualQueue = null;
+
+            RootRegion[] roots;
+
+            foreach (request; batch)
+            {
+                auto element = request.element;
+
+                // No skip on the mark, unlike the measure drain -- and this is
+                // the difference, not an oversight.  An element invalidated
+                // twice in one turn over two regions that do not overlap would
+                // have the second silently dropped, because the first entry
+                // cleared the mark.  Every entry contributes; duplicates union
+                // to the same answer, and what that costs is a rectangle.
+                immutable own = request.hasRegion ? request.region : element.renderBounds;
+
+                element.markVisualValid();
+
+                if (own.empty)
+                    continue;
+
+                immutable region = element.toRootSpace(own);
+                auto root = element.root;
+
+                // A linear scan and not an associative array: the distinct
+                // roots on one dispatcher are its windows, of which there are
+                // one or two.
+                bool merged;
+
+                foreach (ref entry; roots)
+                {
+                    if (entry.root is root)
+                    {
+                        entry.region = entry.region.unite(region);
+                        merged = true;
+                        break;
+                    }
+                }
+
+                if (!merged)
+                    roots ~= RootRegion(root, region);
+            }
+
+            // An element whose tree has no surface over it walks up to an
+            // ordinary Element, whose repaintAsRoot does nothing.  The
+            // request evaporates, which is the same answer markLayoutDirty
+            // gives a detached element for layout.
+            foreach (entry; roots)
+                entry.root.repaintAsRoot(entry.region);
+        }
     }
 
    /*
@@ -274,8 +391,29 @@ private:
     // Thread-local: one dispatcher per thread, so one manager per thread.
     static LayoutManager t_instance;
 
+   /*
+    * A repaint asked for but not yet passed on.  Without a region, the pass
+    * asks the element for its renderBounds when it gets there.
+    */
+    static struct VisualRequest
+    {
+        Element element;
+        Rect    region;
+        bool    hasRegion;
+    }
+
+    /// One surface and everything asked of it this turn.
+    static struct RootRegion
+    {
+        Element root;
+        Rect    region;
+    }
+
     Element[]                   _measureQueue;
     Element[]                   _arrangeQueue;
+    // Never part of the while condition above: a repaint is not layout work
+    // and must not keep the pass spinning.
+    VisualRequest[]             _visualQueue;
     shared(DispatcherOperation) _pending;
     bool                        _inPass;
 }
@@ -332,6 +470,26 @@ version (unittest)
         root.measure(Size(500, 400));
         root.arrange(Rect(0, 0, 500, 400));
         root.updateLayout();
+    }
+
+   /*
+    * A stand-in for a window: the top of a tree that has somewhere to put
+    * pixels, recording what it was asked to repaint.
+    *
+    * An Element and not a Window, and it has to be.  This module may not
+    * import cherry.ui.window -- not even under version(unittest) -- because
+    * window.d already imports this one from its own tests, and both it and
+    * element.d have module constructors: the cycle would abort every binary
+    * before main.  The banner at the top of this file is about exactly this.
+    */
+    private class Surface : Element
+    {
+        Rect[] repaints;
+
+        override void repaintAsRoot(Rect region)
+        {
+            repaints ~= region;
+        }
     }
 }
 
@@ -668,5 +826,258 @@ unittest
     withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
         auto second = LayoutManager.forCurrentThread();
         assert(second !is first, "the stale one fell away on its own");
+    });
+}
+
+unittest
+{
+    // Two elements out of date, one ask, and the region covers both.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto a = new Element;
+        auto b = new Element;
+        surface.addChild(a);
+        surface.addChild(b);
+
+        a.width = 40;
+        a.height = 20;
+        a.horizontalAlignment = HorizontalAlignment.left;
+        a.verticalAlignment = VerticalAlignment.top;
+
+        b.width = 30;
+        b.height = 10;
+        b.horizontalAlignment = HorizontalAlignment.right;
+        b.verticalAlignment = VerticalAlignment.bottom;
+
+        settle(surface);
+        surface.repaints = null;
+
+        a.invalidateVisual();
+        b.invalidateVisual();
+        surface.updateLayout();
+
+        assert(surface.repaints.length == 1, "two asks, one repaint");
+
+        // a sits at the top left and b at the bottom right, so the region
+        // spans the pair.
+        assert(surface.repaints[0] == a.toRootSpace(a.renderBounds)
+                                       .unite(b.toRootSpace(b.renderBounds)));
+    });
+}
+
+unittest
+{
+    // Laid out first, repainted last -- the whole reason the two share a pass.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        static string[] log;
+        log = null;
+
+        static class Noisy : Surface
+        {
+            protected override Size arrangeOverride(Size finalSize)
+            {
+                log ~= "arrange";
+                return super.arrangeOverride(finalSize);
+            }
+
+            override void repaintAsRoot(Rect region)
+            {
+                log ~= "repaint";
+                super.repaintAsRoot(region);
+            }
+        }
+
+        auto surface = new Noisy;
+        surface.addChild(new Element);
+
+        settle(surface);
+        log = null;
+
+        // Both kinds of work outstanding, settled by one pass: the placing
+        // happens in the loop, the asking after it.
+        surface.invalidateMeasure();
+        surface.invalidateVisual();
+        surface.updateLayout();
+
+        assert(log.length >= 2);
+        assert(log[0] == "arrange");
+        assert(log[$ - 1] == "repaint", "the ask comes after the placing, always");
+    });
+}
+
+unittest
+{
+    // A named region is used as given, even one reaching outside the element.
+    // Nothing narrows it to renderBounds: an element repainting a focus ring
+    // it draws beyond its own box is asserting, not suggesting.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto child = new Element;
+        surface.addChild(child);
+
+        child.width = 40;
+        child.height = 20;
+        child.horizontalAlignment = HorizontalAlignment.left;
+        child.verticalAlignment = VerticalAlignment.top;
+
+        settle(surface);
+        surface.repaints = null;
+
+        child.invalidateVisual(Rect(-5, -5, 60, 40));
+        surface.updateLayout();
+
+        assert(surface.repaints.length == 1);
+        assert(surface.repaints[0] == Rect(-5, -5, 60, 40), "as given, not clipped to the child");
+    });
+}
+
+unittest
+{
+    // An element that says it draws wider than it is gets what it asked for.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        static class Overflowing : Element
+        {
+            override @property Rect renderBounds()
+            {
+                // A shadow four units out on every side.
+                return Rect(-4, -4, actualWidth + 8, actualHeight + 8);
+            }
+        }
+
+        auto surface = new Surface;
+        auto child = new Overflowing;
+        surface.addChild(child);
+
+        child.width = 40;
+        child.height = 20;
+        child.horizontalAlignment = HorizontalAlignment.left;
+        child.verticalAlignment = VerticalAlignment.top;
+
+        settle(surface);
+        surface.repaints = null;
+
+        child.invalidateVisual();
+        surface.updateLayout();
+
+        assert(surface.repaints[0] == Rect(-4, -4, 48, 28));
+    });
+}
+
+unittest
+{
+    // An empty region asks for nothing, and does not even mark the element.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto child = new Element;
+        surface.addChild(child);
+
+        settle(surface);
+
+        // Drained once, so the mark it was born with is gone and what happens
+        // next is only what this test asks for.
+        child.invalidateVisual();
+        surface.updateLayout();
+        assert(child.isVisualValid);
+        surface.repaints = null;
+
+        child.invalidateVisual(Rect(10, 10, 0, 50));
+        assert(child.isVisualValid, "nothing was asked, so nothing is out of date");
+
+        surface.updateLayout();
+        assert(surface.repaints.length == 0);
+    });
+}
+
+unittest
+{
+    // Two surfaces on one dispatcher are asked separately, each for its own.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto first = new Surface;
+        auto second = new Surface;
+        auto a = new Element;
+        auto b = new Element;
+        first.addChild(a);
+        second.addChild(b);
+
+        settle(first);
+        settle(second);
+        first.repaints = null;
+        second.repaints = null;
+
+        a.invalidateVisual();
+        b.invalidateVisual();
+        first.updateLayout();
+
+        assert(first.repaints.length == 1);
+        assert(second.repaints.length == 1, "the other surface heard about its own");
+    });
+}
+
+unittest
+{
+    // A pass that threw drops the repaint and keeps the mark, so the next
+    // invalidation brings it back rather than losing it for good.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        static class Brittle : Element
+        {
+            bool broken = true;
+
+            protected override Size measureOverride(Size availableSize)
+            {
+                if (broken)
+                    throw new Exception("measureOverride said no");
+
+                return super.measureOverride(availableSize);
+            }
+        }
+
+        auto surface = new Surface;
+        auto brittle = new Brittle;
+        surface.addChild(brittle);
+
+        assertThrown(settle(surface));
+        assert(surface.repaints.length == 0, "a half-arranged tree is not shown");
+        assert(!brittle.isVisualValid, "and it is still on the books");
+
+        brittle.broken = false;
+        brittle.invalidateMeasure();
+        brittle.invalidateVisual();
+        settle(surface);
+
+        assert(surface.repaints.length == 1);
+    });
+}
+
+unittest
+{
+    // A tree with no surface over it: the ask walks up, finds an ordinary
+    // element, and evaporates -- the same answer layout gives a detached one.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto root = new Element;
+        auto child = new Element;
+        root.addChild(child);
+
+        settle(root);
+
+        child.invalidateVisual();
+        root.updateLayout();
+
+        assert(child.isVisualValid, "asked, answered by nobody, and off the queue");
+    });
+}
+
+unittest
+{
+    // After a shutdown there is nothing to schedule on, so an invalidation
+    // marks its element and stops.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        settle(surface);
+
+        d.shutdown();
+
+        surface.invalidateVisual();
+        assert(!surface.isVisualValid, "marked, it just has nowhere to be settled");
+        assert(LayoutManager.forCurrentThread() is null);
     });
 }

@@ -922,6 +922,51 @@ class Element : CherryObject
     }
 
    /**
+    * Asks for this element to be drawn again, all of it -- which means the
+    * region renderBounds declares.
+    *
+    * Like invalidateArrange this does not travel up the tree, and for a
+    * stronger reason: measure travels because a parent's answer is worked out
+    * from its children's, and drawing has no such dependency.  Finding the
+    * surface to ask is the pass's job, not a mark left on the way.
+    */
+    void invalidateVisual()
+    {
+        _visualDirty = true;
+
+        if (auto manager = layoutManager)
+            manager.enqueueVisual(this);
+    }
+
+   /**
+    * Asks for one region of this element to be drawn again, in the element's
+    * own coordinate space.
+    *
+    * The region is taken as given and is not narrowed to renderBounds: an
+    * element repainting something it draws outside itself -- a focus ring, a
+    * shadow -- is making an assertion, not a suggestion.  An empty region
+    * asks for nothing at all, and does not even mark the element.
+    */
+    void invalidateVisual(Rect region)
+    {
+        if (region.empty)
+            return;
+
+        _visualDirty = true;
+
+        if (auto manager = layoutManager)
+            manager.enqueueVisual(this, region);
+    }
+
+   /**
+    * Whether what is on the screen for this element is up to date.
+    */
+    @property bool isVisualValid() const pure nothrow @nogc
+    {
+        return !_visualDirty;
+    }
+
+   /**
     * Settles whatever layout is outstanding now, instead of waiting for the
     * pass the dispatcher has queued.
     *
@@ -963,7 +1008,33 @@ class Element : CherryObject
         arrange(_arrangeSlot);
     }
 
+   /**
+    * Asks the surface this element is the top of to repaint a region, given
+    * in this element's own coordinate space.
+    *
+    * The default does nothing, and that is the whole of the right behaviour
+    * for a tree with no surface under it: a pass that walked to the top and
+    * found an ordinary Element has found nowhere for pixels to go, and
+    * dropping the request there is correct.  Window overrides this; a popup
+    * or an off-screen surface would too.
+    *
+    * Called from inside a layout pass.  An override may only ask -- it must
+    * not paint on the spot, and it must not lay anything out.
+    */
+    void repaintAsRoot(Rect region)
+    {
+    }
+
 package:
+   /*
+    * Clears the visual mark.  The pass calls this as it takes a request off
+    * the queue, before it works out where the region lands.
+    */
+    void markVisualValid() pure nothrow @nogc
+    {
+        _visualDirty = false;
+    }
+
    /*
     * Where a region of this element's own space falls in the space of the top
     * of its tree -- for an element inside a window, the client area.
@@ -1206,6 +1277,13 @@ private:
     {
         _measureDirty = true;
         _arrangeDirty = true;
+
+        // The visual mark is deliberately not set here.  An element that has
+        // just left the tree is in no surface, so there is nothing to repaint
+        // -- and unlike layout there is no way back: rejoining a tree
+        // invalidates the new parent's measure, which brings a pass down to
+        // the child, but nothing corresponding would ever clear a visual mark
+        // left here.  It would stick for the life of the element.
     }
 
    /*
@@ -1264,6 +1342,10 @@ private:
     Rect                 _arrangedRect;
     bool                 _measureDirty = true;
     bool                 _arrangeDirty = true;
+    // Like the two above: an element that has never been drawn is out of date
+    // by definition.  Unlike them, markLayoutDirty leaves it alone -- see the
+    // comment there.
+    bool                 _visualDirty = true;
 }
 
 /*
