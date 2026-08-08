@@ -210,6 +210,74 @@ protected:
 
         return isVertical ? Size(across, along) : Size(along, across);
     }
+
+   /**
+    * Places the children one after another along the line, each in a slot as
+    * long as it said it needed and as wide as the panel is.
+    *
+    * The slot along the line is the child's own desiredSize -- the very
+    * number the panel summed a moment ago, which is what makes the slots and
+    * the gaps add up to exactly what the panel asked for.  It includes the
+    * child's margin, and the child's own arrange takes the margin back out
+    * again, so what the child ends up at is the size it wanted.
+    *
+    * A child too long for the room is not squeezed here either.  It is handed
+    * what it asked for, Element.arrange grows any slot to at least the
+    * unclipped size, and a child that outgrew the panel overflows and is seen
+    * doing it.
+    *
+    * Across the line the extent is finalSize, and a reader arriving from WPF
+    * will look for the max against the child's desired width that WPF takes
+    * there.  It would be redundant here: Element.arrange has already grown
+    * this size to at least the panel's own unclipped size, and for a vertical
+    * stack that unclipped width is precisely the largest of the children's
+    * desired widths.  So finalSize is already no smaller than any of them,
+    * and the max could never change an answer.
+    *
+    * The rectangles are in the panel's own coordinate space, starting at
+    * (0, 0): renderSubtree pushes each element's placement as a translation,
+    * so a child never learns where its panel is.
+    */
+    override Size arrangeOverride(Size finalSize)
+    {
+        immutable isVertical = orientation == Orientation.vertical;
+        immutable gap = spacing;
+
+        float cursor = 0;
+
+        auto view = children;
+
+        foreach (i; 0 .. view.length)
+        {
+            // Before every child but the first, which is the whole of what
+            // "between" means.  Not floored: a negative gap walking the cursor
+            // backwards is the overlap that was asked for.
+            if (i)
+                cursor += gap;
+
+            auto child = view[i];
+            immutable size = child.desiredSize;
+
+            if (isVertical)
+            {
+                child.arrange(Rect(0, cursor, finalSize.width, size.height));
+                cursor += size.height;
+            }
+            else
+            {
+                child.arrange(Rect(cursor, 0, size.width, finalSize.height));
+                cursor += size.width;
+            }
+        }
+
+        // finalSize and not the cursor.  Element.arrange has already chosen
+        // between the slot and the unclipped size according to this panel's
+        // own alignment -- under stretch it is the slot, under anything else
+        // it is exactly the length the children need.  Returning the cursor
+        // would second-guess that, disagree with the panel's own desiredSize,
+        // and break the alignment offsets that are computed from it.
+        return finalSize;
+    }
 }
 
 /*
@@ -280,13 +348,36 @@ version (unittest)
 {
     import cherry.platform.render : Thickness;
 
-   /// A child with a size and nothing else to say.
+   /// A child with a size of its own in both directions.
     private static class Box : Element
     {
         this(float w, float h)
         {
             width = w;
             height = h;
+        }
+    }
+
+   /*
+    * A child with a length of its own and no opinion across the line, which
+    * is what most things in a stack are.  A Box insists on its width too, so
+    * stretch cannot stretch it and centres it instead -- true, tested
+    * elsewhere, and not what a test about stacking wants to be reading.
+    */
+    private static class Rung : Element
+    {
+        this(float length)
+        {
+            height = length;
+        }
+    }
+
+    /// ditto, for a row.
+    private static class Bar : Element
+    {
+        this(float length)
+        {
+            width = length;
         }
     }
 
@@ -443,4 +534,172 @@ unittest
            "asked how big it would like to be, in both directions");
     assert(inner.desiredSize == Size(40, 25));
     assert(outer.desiredSize == Size(40, 25), "and both answers are finite");
+}
+
+unittest
+{
+    // A column places its children top to bottom, each at its own height and
+    // across the whole width of the panel.
+    auto panel = new StackPanel;
+    auto a = new Rung(10);
+    auto b = new Rung(20);
+    auto c = new Rung(30);
+    panel.addChild(a);
+    panel.addChild(b);
+    panel.addChild(c);
+
+    layOut(panel, Size(200, 100));
+
+    assert(a.arrangedRect == Rect(0, 0, 200, 10));
+    assert(b.arrangedRect == Rect(0, 10, 200, 20));
+    assert(c.arrangedRect == Rect(0, 30, 200, 30));
+}
+
+unittest
+{
+    // A child with a width of its own cannot be stretched across the line, so
+    // it sits in the middle of the slot the panel gave it -- which is what
+    // stretch does when it cannot stretch, decided in Element and not here.
+    auto panel = new StackPanel;
+    auto box = new Box(40, 10);
+    panel.addChild(box);
+
+    layOut(panel, Size(200, 100));
+
+    assert(box.arrangedRect == Rect(80, 0, 40, 10));
+}
+
+unittest
+{
+    // A row, left to right, transposed in every particular.
+    auto panel = new StackPanel;
+    panel.orientation = Orientation.horizontal;
+    auto a = new Bar(10);
+    auto b = new Bar(20);
+    panel.addChild(a);
+    panel.addChild(b);
+
+    layOut(panel, Size(200, 100));
+
+    assert(a.arrangedRect == Rect(0, 0, 10, 100));
+    assert(b.arrangedRect == Rect(10, 0, 20, 100));
+}
+
+unittest
+{
+    // Spacing and margins are both gaps and they add up rather than replacing
+    // each other: between these two children lie five of bottom margin, eight
+    // of spacing and five of top margin.
+    auto panel = new StackPanel;
+    panel.spacing = 8;
+
+    auto a = new Rung(20);
+    auto b = new Rung(20);
+    a.margin = Thickness(5);
+    b.margin = Thickness(5);
+
+    panel.addChild(a);
+    panel.addChild(b);
+
+    layOut(panel, Size(200, 200));
+
+    assert(a.arrangedRect == Rect(5, 5, 190, 20), "in by its margin on every side");
+    assert(b.arrangedRect.y == 5 + 20 + 5 + 8 + 5, "bottom margin, gap, top margin");
+    assert(b.arrangedRect.y - (a.arrangedRect.y + a.arrangedRect.height) == 18);
+}
+
+unittest
+{
+    // A child that outgrew the panel pushes the next one along rather than
+    // being absorbed: overflow that shows is overflow that gets fixed.
+    auto panel = new StackPanel;
+    auto big = new Box(300, 500);
+    auto after = new Box(40, 20);
+    panel.addChild(big);
+    panel.addChild(after);
+
+    layOut(panel, Size(100, 50));
+
+    assert(big.actualHeight == 500, "arranged at what it needed, not at what fitted");
+    assert(big.actualWidth == 300);
+    assert(after.arrangedRect.y == 500, "and the next child starts below all of it");
+}
+
+unittest
+{
+    // Across the line a child fills the panel unless it has a width of its
+    // own; the panel places it, and its own alignment positions it inside
+    // what it was given.  The two do not fight.
+    auto panel = new StackPanel;
+    auto filling = new Element;
+    auto sized = new Box(50, 20);
+    sized.horizontalAlignment = HorizontalAlignment.right;
+
+    panel.addChild(filling);
+    panel.addChild(sized);
+
+    layOut(panel, Size(200, 100));
+
+    assert(filling.actualWidth == 200, "nothing of its own to insist on, so it takes the width");
+    assert(sized.arrangedRect == Rect(150, filling.actualHeight, 50, 20),
+           "pushed to the right edge of the slot the panel gave it, at the stacking cursor");
+}
+
+unittest
+{
+    // A negative gap walks the cursor backwards, which is the overlap that
+    // was asked for -- unlike the reported size, this is not floored.
+    auto panel = new StackPanel;
+    panel.spacing = -10;
+    auto a = new Box(40, 30);
+    auto b = new Box(40, 30);
+    panel.addChild(a);
+    panel.addChild(b);
+
+    layOut(panel, Size(200, 200));
+
+    assert(a.arrangedRect.y == 0);
+    assert(b.arrangedRect.y == 20, "thirty down, ten back");
+}
+
+unittest
+{
+    // An empty panel lays out without complaint and takes the room it was
+    // given.
+    auto panel = new StackPanel;
+
+    layOut(panel, Size(200, 100));
+
+    assert(panel.actualWidth == 200 && panel.actualHeight == 100);
+    assert(panel.desiredSize == Size(0, 0));
+}
+
+unittest
+{
+    // Both properties change how much the panel asks for, so both invalidate
+    // the measure -- and the parent hears about it, because invalidateMeasure
+    // walks up on its own.
+    auto parent = new Element;
+    auto panel = new StackPanel;
+    parent.addChild(panel);
+    panel.addChild(new Box(40, 20));
+
+    void settle()
+    {
+        panel.invalidateMeasure();
+        parent.measure(Size(500, 400));
+        parent.arrange(Rect(0, 0, 500, 400));
+        assert(panel.isMeasureValid && panel.isArrangeValid);
+        assert(parent.isMeasureValid && parent.isArrangeValid);
+    }
+
+    settle();
+    panel.orientation = Orientation.horizontal;
+    assert(!panel.isMeasureValid && !panel.isArrangeValid);
+    assert(!parent.isMeasureValid, "which way the line runs changes what it costs");
+
+    settle();
+    panel.spacing = 12;
+    assert(!panel.isMeasureValid);
+    assert(!parent.isMeasureValid, "and so does the room between the children");
 }
