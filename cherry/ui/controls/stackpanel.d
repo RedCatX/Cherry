@@ -130,6 +130,86 @@ class StackPanel : Element
     {
         setValue(spacingProperty, Value(value));
     }
+
+protected:
+   /**
+    * Offers every child all the room there could be along the line and the
+    * room the panel really has across it, then adds the answers up along and
+    * takes the largest across.
+    *
+    * The infinite offer is the question "how long would you like to be?", and
+    * it is the right question: the panel divides nothing up, so a child's
+    * length along the line is its own business.  Across the line the offer is
+    * the truth, because that is the width the child will really be given.
+    *
+    * What is summed is desiredSize and not unclippedDesiredSize.  It includes
+    * the child's margin, and the margin is part of what the panel is paying
+    * for; along the line the cap that separates the two is a cap against what
+    * was offered, and what was offered was infinity, so they agree anyway.
+    * The footnote is a child with a MaxHeight of its own: there the two part
+    * company, the panel follows desiredSize, and the child will overflow the
+    * slot it is given.  That is right -- the child renounced the room, and the
+    * panel should not ask its parent for room nobody wants.
+    *
+    * Nothing infinite comes back out although something infinite went in, and
+    * not by luck: the panel never echoes its constraint.  Every number it
+    * reports is a sum or a maximum of children's desiredSizes, and each of
+    * those is finite by the contract Element.measure asserts.  With no
+    * children the answer is zero.  That is what makes the case a reader
+    * doubts -- a horizontal stack inside a vertical one, offered infinity on
+    * both axes -- come out finite with no special case for it.
+    */
+    override Size measureOverride(Size availableSize)
+    {
+        immutable isVertical = orientation == Orientation.vertical;
+
+        auto offer = availableSize;
+        if (isVertical)
+            offer.height = float.infinity;
+        else
+            offer.width = float.infinity;
+
+        float along = 0;
+        float across = 0;
+
+        auto view = children;
+
+        foreach (i; 0 .. view.length)
+        {
+            auto child = view[i];
+            child.measure(offer);
+
+            immutable size = child.desiredSize;
+
+            if (isVertical)
+            {
+                along += size.height;
+                if (size.width > across)
+                    across = size.width;
+            }
+            else
+            {
+                along += size.width;
+                if (size.height > across)
+                    across = size.height;
+            }
+        }
+
+        // n children, n - 1 gaps.  Spelled with the guard rather than as
+        // (length - 1), because length is a size_t and one child would
+        // otherwise buy four billion gaps.
+        if (view.length > 1)
+            along += spacing * (view.length - 1);
+
+        // A spacing negative enough to out-pull the children is a direction
+        // rather than a length, and a size is not negative.  Only the answer
+        // is floored: arrangeOverride lets the cursor run backwards, because
+        // overlapping is what was asked for.
+        if (along < 0)
+            along = 0;
+
+        return isVertical ? Size(across, along) : Size(along, across);
+    }
 }
 
 /*
@@ -194,4 +274,173 @@ unittest
     assertThrown(panel.setValue(StackPanel.spacingProperty, Value(float.infinity)));
     assertThrown(panel.setValue(StackPanel.spacingProperty, Value(float.nan)));
     assert(panel.spacing == -4, "and neither refusal disturbed what was there");
+}
+
+version (unittest)
+{
+    import cherry.platform.render : Thickness;
+
+   /// A child with a size and nothing else to say.
+    private static class Box : Element
+    {
+        this(float w, float h)
+        {
+            width = w;
+            height = h;
+        }
+    }
+
+   /*
+    * Records the room it was offered and answers with a size fixed in
+    * advance -- the half of a measure a test cannot read off the element.
+    */
+    private static class Probe : Element
+    {
+        Size seenAvailable;
+        Size answer;
+
+        this(Size answer = Size(0, 0))
+        {
+            this.answer = answer;
+        }
+
+        protected override Size measureOverride(Size availableSize)
+        {
+            seenAvailable = availableSize;
+            return answer;
+        }
+    }
+
+   /// Measures and arranges in one go, so no test can forget the first half.
+    private void layOut(Element root, Size room)
+    {
+        root.measure(room);
+        root.arrange(Rect(0, 0, room.width, room.height));
+    }
+}
+
+unittest
+{
+    // A column: the lengths add up, the widest child decides the width.
+    auto panel = new StackPanel;
+    panel.addChild(new Box(40, 10));
+    panel.addChild(new Box(70, 20));
+    panel.addChild(new Box(30, 30));
+
+    panel.measure(Size(200, 100));
+
+    assert(panel.desiredSize == Size(70, 60), "the widest of them, and the sum of the three");
+}
+
+unittest
+{
+    // A row is the same thing transposed, which is the cheapest way to say
+    // the two axes are not confused with each other.
+    auto panel = new StackPanel;
+    panel.orientation = Orientation.horizontal;
+    panel.addChild(new Box(10, 40));
+    panel.addChild(new Box(20, 70));
+    panel.addChild(new Box(30, 30));
+
+    panel.measure(Size(200, 100));
+
+    assert(panel.desiredSize == Size(60, 70));
+}
+
+unittest
+{
+    // A child's margin is part of what it costs, so the panel pays for it in
+    // both directions: along the line it lengthens the sum, across it widens
+    // the widest.
+    auto panel = new StackPanel;
+
+    auto plain = new Box(40, 10);
+    auto spaced = new Box(40, 20);
+    spaced.margin = Thickness(5);
+
+    panel.addChild(plain);
+    panel.addChild(spaced);
+
+    panel.measure(Size(200, 100));
+
+    assert(panel.desiredSize == Size(50, 40),
+           "40 plus ten of margin across, and 10 plus 20 plus ten of margin along");
+}
+
+unittest
+{
+    // Gaps go between children and nowhere else.
+    auto empty = new StackPanel;
+    empty.spacing = 10;
+    empty.measure(Size(200, 100));
+    assert(empty.desiredSize == Size(0, 0), "no children, so nothing to be between");
+
+    auto one = new StackPanel;
+    one.spacing = 10;
+    one.addChild(new Box(40, 25));
+    one.measure(Size(200, 100));
+    assert(one.desiredSize == Size(40, 25), "one child, and still nothing to be between");
+
+    auto three = new StackPanel;
+    three.spacing = 10;
+    three.addChild(new Box(40, 10));
+    three.addChild(new Box(40, 20));
+    three.addChild(new Box(40, 30));
+    three.measure(Size(200, 100));
+    assert(three.desiredSize.height == 80, "three children and two gaps, not three and not four");
+}
+
+unittest
+{
+    // A negative gap overlaps the children, and enough of it takes the whole
+    // panel to nothing rather than to a negative size.
+    auto panel = new StackPanel;
+    panel.spacing = -5;
+    panel.addChild(new Box(40, 20));
+    panel.addChild(new Box(40, 20));
+
+    panel.measure(Size(200, 100));
+    assert(panel.desiredSize.height == 35, "two of twenty, pulled five together");
+
+    panel.spacing = -100;
+    panel.measure(Size(200, 100));
+    assert(panel.desiredSize.height == 0, "a size is not negative, however hard it is pulled");
+}
+
+unittest
+{
+    // A child bigger than the room is reported at the room's size, because
+    // that is what measure promises a parent -- and what it really wanted is
+    // still on the record.
+    auto panel = new StackPanel;
+    panel.addChild(new Box(300, 500));
+
+    panel.measure(Size(100, 50));
+
+    assert(panel.desiredSize == Size(100, 50), "the parent hears only what it offered");
+    assert(panel.unclippedDesiredSize == Size(100, 500),
+           "the length survives; the width was already capped in the child");
+}
+
+unittest
+{
+    // A row inside a column, measured with an infinite height: the inner
+    // panel offers its own children infinity on the other axis too, so a
+    // child of it is asked an unbounded question on both.  Nothing infinite
+    // comes back, and no special case says so -- the panel simply never
+    // repeats its constraint.
+    auto outer = new StackPanel;
+    auto inner = new StackPanel;
+    inner.orientation = Orientation.horizontal;
+
+    auto probe = new Probe(Size(40, 25));
+    inner.addChild(probe);
+    outer.addChild(inner);
+
+    outer.measure(Size(200, float.infinity));
+
+    assert(probe.seenAvailable == Size(float.infinity, float.infinity),
+           "asked how big it would like to be, in both directions");
+    assert(inner.desiredSize == Size(40, 25));
+    assert(outer.desiredSize == Size(40, 25), "and both answers are finite");
 }
