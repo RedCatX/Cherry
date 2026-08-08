@@ -831,6 +831,35 @@ class Element : CherryObject
     }
 
    /**
+    * The region this element draws into, in its own coordinate space.
+    *
+    * The default is its own bounds -- Rect(0, 0, actualWidth, actualHeight),
+    * the rectangle onRender's documentation already names.  Nothing clips, so
+    * that default is a claim rather than a fact: an element drawing a shadow,
+    * a focus ring or an overshooting glyph draws outside it and must widen
+    * this to say so.
+    *
+    * What the framework promises is that every pixel inside the region an
+    * element declares here, or names through invalidateVisual(Rect), is
+    * repainted after that element is invalidated -- and that the place an
+    * element occupied before it moved is repainted to the accuracy of this.
+    *
+    * What it does not promise is that nothing else is repainted; the region
+    * is a lower bound.  Nor does it promise anything at all about drawing
+    * outside the region declared here.  That is the price of having no
+    * clipping, and it is paid by the element that understated its reach.
+    *
+    * Only this element's own drawing is meant, not its children's.  A repaint
+    * redraws the whole tree and uses the region to decide which pixels reach
+    * the screen, so a child inside the region is redrawn anyway and one
+    * outside it did not change.
+    */
+    @property Rect renderBounds()
+    {
+        return Rect(0, 0, actualWidth, actualHeight);
+    }
+
+   /**
     * Whether the measured size is up to date.  False from the moment
     * invalidateMeasure is called until a pass has answered it.
     */
@@ -932,6 +961,36 @@ class Element : CherryObject
     void arrangeAsRoot()
     {
         arrange(_arrangeSlot);
+    }
+
+package:
+   /*
+    * Where a region of this element's own space falls in the space of the top
+    * of its tree -- for an element inside a window, the client area.
+    *
+    * renderSubtree pushes Matrix.translation(arrangedRect.x, arrangedRect.y)
+    * for every element from the root down, so the offset is the sum of those
+    * origins over this element and each of its ancestors.  This is that walk
+    * with everything but the translation left out.  It includes this element
+    * and does not stop one short of it: the root pushes its own placement
+    * like everybody else, which is what makes a Window need no exception.
+    *
+    * Not const, and it cannot be: a const class reference cannot be rebound,
+    * so the walk would need Rebindable.  isAncestorOf documents the same
+    * thing, and root() does the same mutable walk.
+    */
+    Rect toRootSpace(Rect region) pure nothrow @nogc
+    {
+        float dx = 0;
+        float dy = 0;
+
+        for (Element e = this; e !is null; e = e._parent)
+        {
+            dx += e._arrangedRect.x;
+            dy += e._arrangedRect.y;
+        }
+
+        return Rect(region.x + dx, region.y + dy, region.width, region.height);
     }
 
 protected:
@@ -2555,4 +2614,53 @@ unittest
     auto plain = new RecordingContext;
     new Element().renderSubtree(plain);
     assert(plain.depth == 0);
+}
+
+unittest
+{
+    // renderBounds is the element's own box, in its own space.
+    auto e = new Element;
+    assert(e.renderBounds == Rect(0, 0, 0, 0), "nothing until it has been arranged");
+
+    e.arrange(Rect(10, 20, 300, 150));
+    assert(e.renderBounds == Rect(0, 0, 300, 150), "its size, at its own origin");
+}
+
+unittest
+{
+    // toRootSpace agrees with what the render walk actually does.
+    //
+    // Asserted against the recorder's own output rather than against numbers
+    // written out here, so that the two cannot drift apart: this is the same
+    // tree as the nesting test above, and the point is that the offset the
+    // walk accumulates and the offset this computes are the same offset.
+    auto root = new Marker;
+    auto a = new Marker;
+    auto g = new Marker;
+    root.addChild(a);
+    a.addChild(g);
+
+    a.margin = Thickness(10);
+    g.margin = Thickness(5);
+
+    root.measure(Size(200, 100));
+    root.arrange(Rect(0, 0, 200, 100));
+
+    auto ctx = new RecordingContext;
+    root.renderSubtree(ctx);
+
+    assert(root.toRootSpace(root.renderBounds) == ctx.entries[0].rect);
+    assert(a.toRootSpace(a.renderBounds) == ctx.entries[1].rect);
+    assert(g.toRootSpace(g.renderBounds) == ctx.entries[2].rect);
+}
+
+unittest
+{
+    // A detached element is the top of its own fragment, so the walk covers
+    // only its own placement.
+    auto orphan = new Element;
+    orphan.arrange(Rect(7, 9, 40, 30));
+
+    assert(orphan.root is orphan);
+    assert(orphan.toRootSpace(Rect(1, 2, 5, 5)) == Rect(8, 11, 5, 5));
 }
