@@ -122,6 +122,74 @@ struct Rect
 
     @property float right() pure const nothrow @nogc { return x + width; }
     @property float bottom() pure const nothrow @nogc { return y + height; }
+
+   /**
+    * Whether the rectangle covers nothing.
+    *
+    * Written as a pair of refusals rather than as `width <= 0`, so that a NaN
+    * extent counts as empty instead of as neither -- the same reasoning the
+    * layout arithmetic uses at its own edges.  What it buys is that `Rect.init`
+    * is a usable accumulator: a union starting there is the union of what is
+    * put into it and nothing else, and an element that has never been arranged
+    * contributes nothing rather than dragging the answer to the origin.
+    */
+    @property bool empty() pure const nothrow @nogc
+    {
+        return !(width > 0) || !(height > 0);
+    }
+
+   /**
+    * The smallest rectangle covering both, with an empty operand ignored --
+    * in either position, so that folding a list into `Rect.init` gives the
+    * union of the list.
+    *
+    * Named unite because union is a keyword.
+    */
+    Rect unite(Rect other) pure const nothrow @nogc
+    {
+        if (other.empty)
+            return this;
+        if (empty)
+            return other;
+
+        immutable left   = x < other.x ? x : other.x;
+        immutable top    = y < other.y ? y : other.y;
+        immutable right_ = this.right  > other.right  ? this.right  : other.right;
+        immutable bottom_= this.bottom > other.bottom ? this.bottom : other.bottom;
+
+        return Rect(left, top, right_ - left, bottom_ - top);
+    }
+}
+
+unittest
+{
+    // What counts as covering nothing.  The NaN case is the one that matters:
+    // it is how a rectangle derived from an unarranged element arrives, and
+    // treating it as neither empty nor real would put it in a union.
+    assert(Rect.init.empty);
+    assert(Rect(10, 20, 0, 50).empty);
+    assert(Rect(10, 20, 50, 0).empty);
+    assert(Rect(10, 20, -5, 50).empty);
+    assert(Rect(10, 20, float.nan, 50).empty);
+    assert(!Rect(0, 0, 1, 1).empty);
+}
+
+unittest
+{
+    // The union is the bounding box, and an empty operand is not in it.
+    immutable a = Rect(0, 0, 10, 10);
+    immutable b = Rect(20, 30, 10, 10);
+
+    assert(a.unite(b) == Rect(0, 0, 30, 40));
+    assert(b.unite(a) == a.unite(b), "and it does not matter which way round");
+
+    assert(a.unite(Rect.init) == a);
+    assert(Rect.init.unite(a) == a, "which is what makes Rect.init an accumulator");
+    assert(a.unite(a) == a);
+
+    // Nested: the larger one already covers the smaller.
+    immutable outer = Rect(0, 0, 100, 100);
+    assert(outer.unite(Rect(10, 10, 5, 5)) == outer);
 }
 
 /**
