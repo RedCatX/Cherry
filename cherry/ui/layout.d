@@ -1155,3 +1155,50 @@ unittest
         assert(surface.repaints.length == 0, "and then it is quiet");
     });
 }
+
+unittest
+{
+    // A child leaving takes its pixels with it, so the parent asks for the
+    // place it was: the child cannot, having just lost the tree the region
+    // was expressed in.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto child = new Element;
+        surface.addChild(child);
+
+        child.width = 50;
+        child.height = 20;
+        child.horizontalAlignment = HorizontalAlignment.left;
+        child.verticalAlignment = VerticalAlignment.top;
+
+        settle(surface);
+        assert(child.arrangedRect == Rect(0, 0, 50, 20));
+        surface.repaints = null;
+
+        surface.removeChild(child);
+        surface.updateLayout();
+
+        assert(surface.repaints.length == 1);
+        assert(surface.repaints[0] == Rect(0, 0, 50, 20), "exactly the hole it left");
+    });
+}
+
+unittest
+{
+    // A child joining has never been drawn here, whatever it did before --
+    // and that is not covered by arranging, which asks only when the
+    // placement changes.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto child = new Element;
+
+        settle(surface);
+        surface.repaints = null;
+
+        surface.addChild(child);
+        assert(!child.isVisualValid);
+
+        surface.updateLayout();
+        assert(surface.repaints.length == 1);
+    });
+}

@@ -415,6 +415,12 @@ class Element : CherryObject
         invalidateMeasure();
         child.invalidateMeasure();
 
+        // It has never been drawn in this tree, whatever it did in the last
+        // one.  Arranging will usually ask on its own, but only when the
+        // placement changes -- a child re-added at the very rectangle it had
+        // before would otherwise arrive invisible.
+        child.invalidateVisual();
+
         child.onAttached(this);
     }
 
@@ -437,10 +443,18 @@ class Element : CherryObject
             }
         }
 
+        immutable vacated = child._arrangedRect;
+
         child._parent = null;
 
         invalidateMeasure();
         child.markLayoutDirty();
+
+        // The hole a departing child leaves is the parent's to fill: the
+        // child cannot ask for it, having just lost the tree the region was
+        // expressed in.  arrangedRect is already in this element's space,
+        // which is exactly what the region form wants.
+        invalidateVisual(vacated);
 
         child.onDetached(this);
     }
@@ -458,6 +472,10 @@ class Element : CherryObject
 
         foreach (child; detached)
         {
+            // Same reasoning as removeChild: the hole is this element's to
+            // fill, and arrangedRect is already in its coordinate space.
+            invalidateVisual(child._arrangedRect);
+
             child._parent = null;
             child.markLayoutDirty();
             child.onDetached(this);
