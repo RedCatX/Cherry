@@ -1,5 +1,7 @@
 module cherry.platform.window;
 
+import cherry.platform.render : Rect;
+
 /**
  * Why the desktop session is ending.
  */
@@ -91,8 +93,26 @@ interface PlatformWindow
     /// Requests a client-area size.
     void setClientSize(int width, int height);
 
-    /// Asks the platform to schedule a repaint (onPaintRequested follows).
+   /**
+    * Asks the platform to schedule a repaint of the whole client area
+    * (onPaintRequested follows).
+    *
+    * Kept alongside the region form because "all of it" is not something the
+    * framework can name as a rectangle: the window's own Width and Height are
+    * what it asked for, which the platform may not yet have granted.
+    */
     void invalidate();
+
+   /**
+    * Asks for a repaint of one region, in the same device-independent
+    * coordinates the drawing model uses.
+    *
+    * The region is a lower bound on what will be repainted and never an upper
+    * one: a platform may repaint more, and one that cannot express regions at
+    * all answers this by invalidating everything.  An empty region asks for
+    * nothing and must be honoured as such.
+    */
+    void invalidate(Rect region);
 
     @property int clientWidth();
     @property int clientHeight();

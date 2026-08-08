@@ -54,7 +54,34 @@ final class TestPlatformWindow : PlatformWindow
 
     void setTitle(string value) { title = value; }
 
-    void invalidate() { invalidations++; }
+   /**
+    * Every repaint asked for, in order.  A request that named no region
+    * records an empty rectangle rather than the client area, so that a
+    * regression where the framework starts asking for everything when it
+    * should have asked for a region is visible instead of blending in.
+    */
+    Rect[] invalidatedRegions;
+
+    void invalidate()
+    {
+        invalidations++;
+        invalidatedRegions ~= Rect.init;
+    }
+
+    void invalidate(Rect region)
+    {
+        invalidations++;
+        invalidatedRegions ~= region;
+    }
+
+    /// The union of everything asked for, which is what most tests want.
+    @property Rect invalidatedUnion()
+    {
+        Rect all;
+        foreach (region; invalidatedRegions)
+            all = all.unite(region);
+        return all;
+    }
 
     void setClientSize(int w, int h)
     {

@@ -6,6 +6,7 @@ import core.stdc.stdio : fprintf, stderr;
 import core.sys.windows.windows;
 import std.utf : toUTF16z;
 
+import cherry.platform.render : Rect;
 import cherry.platform.window;
 
 pragma(lib, "user32");
@@ -64,6 +65,33 @@ final class Win32Window : PlatformWindow
     void invalidate()
     {
         InvalidateRect(_hwnd, null, FALSE);
+    }
+
+    void invalidate(Rect region)
+    {
+        // An empty region asks for nothing, and a null RECT* is what
+        // InvalidateRect reads as "the whole window" -- arriving there by
+        // accident is exactly what this stops.
+        if (region.empty)
+            return;
+
+        // Outward to whole pixels.  A rectangle covering half a pixel needs
+        // that pixel repainted, and rounding outward is the only rule that
+        // cannot leave a seam along an edge.  RECT's right and bottom are
+        // exclusive, which is what ceil gives.
+        //
+        // The framework's coordinates are device-independent; this process is
+        // DPI-unaware, so a device-independent pixel is a pixel.  The day that
+        // stops being true, the scale belongs here and nowhere else: this is
+        // the one place the two spaces meet.
+        import std.math : ceil, floor;
+
+        auto rect = RECT(cast(int) floor(region.x),
+                         cast(int) floor(region.y),
+                         cast(int) ceil(region.right),
+                         cast(int) ceil(region.bottom));
+
+        InvalidateRect(_hwnd, &rect, FALSE);
     }
 
     void setClientSize(int width, int height)

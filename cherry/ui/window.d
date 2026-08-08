@@ -556,15 +556,25 @@ unittest
 
 unittest
 {
-    // invalidate() forwards to the platform.
+    // invalidate() forwards to the platform, and asks for all of it rather
+    // than for a region.
+    //
+    // Counted against what was already there rather than from zero: laying a
+    // brand new window out has its own reasons to ask for a repaint, and
+    // whether that request has reached the platform by the time this line
+    // runs is not this test's business.
     TestPlatformWindow platform;
     auto window = new Window((PlatformWindowHost host) {
         platform = new TestPlatformWindow(host);
         return cast(PlatformWindow) platform;
     });
 
+    auto before = platform.invalidations;
     window.invalidate();
-    assert(platform.invalidations == 1);
+
+    assert(platform.invalidations == before + 1);
+    assert(platform.invalidatedRegions[$ - 1].empty,
+           "all of it, not a region: invalidate() names no rectangle");
 
     // A paint request on a handle-less fake is a no-op (no renderer).
     platform.host.onPaintRequested();
