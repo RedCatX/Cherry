@@ -70,6 +70,17 @@ interface PlatformWindowHost
     void onMouseUp(MouseButton button, int x, int y);
     /// ditto
     void onMouseMove(int x, int y);
+
+   /**
+    * The pointer left the client area, and no position comes with it because
+    * there is none to give -- it is somewhere else now.
+    *
+    * Without this the host cannot tell "the pointer stopped moving" from "the
+    * pointer went away", and whatever it was over would stay over for good.  A
+    * platform that cannot detect this must simply never call it; the host is
+    * then no worse off than it would be with no notification at all.
+    */
+    void onMouseLeave();
 }
 
 /**

@@ -192,7 +192,14 @@ private:
                 return 0;
 
             case WM_MOUSEMOVE:
+                trackMouseLeave(hwnd);
                 notify({ _host.onMouseMove(mouseX(lParam), mouseY(lParam)); });
+                return 0;
+
+            case WM_MOUSELEAVE:
+                // The subscription is spent; the next move buys another.
+                _trackingLeave = false;
+                notify({ _host.onMouseLeave(); });
                 return 0;
 
             default:
@@ -232,6 +239,31 @@ private:
         return lParam == 0 ? SessionEndReason.shutdown : SessionEndReason.unknown;
     }
 
+   /*
+    * Asks to be told once when the pointer leaves the client area.
+    *
+    * Windows has no such message until it is asked for, and the subscription
+    * is spent the moment it fires -- so it has to be renewed, and the natural
+    * place is the movement that proves the pointer is here.  The flag is what
+    * keeps that from being a call on every WM_MOUSEMOVE.
+    *
+    * A failure is left alone: the pointer would then stay logically inside the
+    * window until it came back, which is wrong but quiet, and there is nothing
+    * better to do about it from here.
+    */
+    void trackMouseLeave(HWND hwnd) nothrow
+    {
+        if (_trackingLeave)
+            return;
+
+        TRACKMOUSEEVENT tracking;
+        tracking.cbSize = TRACKMOUSEEVENT.sizeof;
+        tracking.dwFlags = TME_LEAVE;
+        tracking.hwndTrack = hwnd;
+
+        _trackingLeave = TrackMouseEvent(&tracking) != FALSE;
+    }
+
     static int mouseX(LPARAM lParam) pure nothrow @nogc
     {
         return cast(short) LOWORD(lParam);
@@ -267,6 +299,9 @@ private:
 
     PlatformWindowHost _host;
     HWND               _hwnd;
+    // Whether a WM_MOUSELEAVE is still owed to us.  TME_LEAVE is a one-shot
+    // subscription, so this is what says whether one is outstanding.
+    bool               _trackingLeave;
 }
 
 private extern (Windows) LRESULT cherryWindowProc(HWND hwnd, UINT message,

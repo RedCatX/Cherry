@@ -297,6 +297,21 @@ private:
         {
             this.outer.handleMouseMove(x, y);
         }
+
+        void onMouseLeave()
+        {
+            this.outer.handleMouseLeave();
+        }
+    }
+
+   /*
+    * The pointer went somewhere else entirely, so everything it was over is
+    * left -- with the position it was last seen at, since there is no new one.
+    */
+    void handleMouseLeave()
+    {
+        updateMouseOver(_mouseOver, null, _lastMouseX, _lastMouseY);
+        _mouseOver = null;
     }
 
    /*
@@ -309,6 +324,9 @@ private:
     void handleMouseMove(int x, int y)
     {
         auto target = hitElement(x, y);
+
+        _lastMouseX = x;
+        _lastMouseY = y;
 
         updateMouseOver(_mouseOver, target, x, y);
         _mouseOver = target;
@@ -525,6 +543,10 @@ private:
     // next notification can work out what changed.  Null before the pointer
     // has ever been in the window, and again once it has left.
     Element        _mouseOver;
+    // Where it was when it was last seen, so that leaving -- which carries no
+    // position, the pointer being elsewhere by then -- has one to report.
+    float          _lastMouseX = 0;
+    float          _lastMouseY = 0;
     Multicast!(void delegate(Window)) _onClosed;
     Multicast!WindowClosingHandler _onClosing;
     bool _syncingFromPlatform;
@@ -800,6 +822,39 @@ unittest
 
     w.platform.host.onMouseMove(50, 50);
     assert(overWhenMoved, "enter had already run by the time move was raised");
+}
+
+unittest
+{
+    // The pointer leaving the window takes the whole chain with it, window
+    // included -- there is nothing left for it to be over.
+    string[] log;
+
+    auto w = makeWindow();
+    auto host = new Zone("host", &log, Rect(0, 0, 200, 100));
+    auto inner = new Zone("inner", &log, Rect(0, 0, 100, 100));
+    host.addChild(inner);
+    w.window.addChild(host);
+    w.window.updateLayout();
+
+    w.platform.host.onMouseMove(50, 50);
+    assert(inner.isMouseOver && host.isMouseOver && w.window.isMouseOver);
+
+    log = null;
+    w.platform.host.onMouseLeave();
+
+    assert(log == ["leave:inner", "leave:host"], "deepest first, as on any other exit");
+    assert(!inner.isMouseOver && !host.isMouseOver);
+    assert(!w.window.isMouseOver, "and the window is not under the pointer either");
+
+    // Leaving again with nothing over is not an error and reports nothing.
+    log = null;
+    w.platform.host.onMouseLeave();
+    assert(log == []);
+
+    // Coming back starts the chain over.
+    w.platform.host.onMouseMove(50, 50);
+    assert(log == ["enter:host", "enter:inner"]);
 }
 
 unittest
