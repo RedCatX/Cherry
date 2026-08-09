@@ -20,8 +20,15 @@ module cherry.ui.visual;
  * overrides it.  Imports then run strictly downwards -- layout.d imports this,
  * this imports nothing of cherry.ui but styledelement.d -- and a module
  * constructor here becomes a perfectly ordinary thing to add.
+ *
+ * Which it now is: IsHitTestVisible below is registered from one.  It is worth
+ * noticing that this is exactly the day the paragraph above was written for,
+ * and that nothing had to be rearranged to reach it.
  */
 
+import cherry.core.property;
+import cherry.core.rtti;
+import cherry.core.value;
 import cherry.platform.render : DrawingContext, Matrix, Point, Rect;
 import cherry.ui.styledelement;
 
@@ -48,6 +55,48 @@ import cherry.ui.styledelement;
  */
 class Visual : StyledElement
 {
+    shared static this()
+    {
+        // No affectsRender: turning a visual deaf to the mouse changes nothing
+        // about the pixels it puts on the screen.
+        PropertyMetadata hitTestMeta;
+        hitTestMeta.defaultValue = Value(true);
+
+        isHitTestVisibleProperty = Property.register("IsHitTestVisible",
+            getRtti!bool(), getRtti!Visual(), hitTestMeta);
+    }
+
+    static immutable(Property) isHitTestVisibleProperty;
+
+   /**
+    * Whether the mouse can find this visual -- and, when it cannot, anything
+    * below it either.
+    *
+    * The whole subtree goes with it, which is what makes this mean "clicks pass
+    * through this layer" rather than "this one node is skipped".  WPF works the
+    * same way, and the alternative would be strange: a decoration drawn over a
+    * control would let the mouse through itself and then catch it on the label
+    * inside it.
+    *
+    * This is the answer to "it draws but takes no input" -- a property and not a
+    * position in the class hierarchy, because the same element wants to be
+    * ordinary in every other respect, and a parallel branch of types for each
+    * "the same, but deaf" would be a poor trade.
+    *
+    * It says nothing about being seen.  A visual with this false is drawn
+    * exactly as before; IsVisible, when it exists, is the other question.
+    */
+    @property bool isHitTestVisible() const
+    {
+        return getValue(isHitTestVisibleProperty).get!bool;
+    }
+
+    /// ditto
+    @property void isHitTestVisible(bool value)
+    {
+        setValue(isHitTestVisibleProperty, Value(value));
+    }
+
    /**
     * The node above this one in the visual tree, or null at its top.
     *
@@ -257,6 +306,9 @@ class Visual : StyledElement
     */
     Visual hitTest(Point point)
     {
+        if (!isHitTestVisible)
+            return null;
+
         immutable local = Point(point.x - _arrangedRect.x, point.y - _arrangedRect.y);
 
         foreach_reverse (i; 0 .. visualChildCount)
@@ -638,4 +690,48 @@ unittest
     root.add(flat);
 
     assert(root.hitTest(Point(10, 20)) is root);
+}
+
+unittest
+{
+    // A visual the mouse cannot find takes its whole subtree with it, so what
+    // is behind becomes reachable -- which is what "clicks pass through this
+    // layer" has to mean to be useful.
+    auto root = new Node("root", Rect(0, 0, 200, 200));
+    auto under = new Node("under", Rect(0, 0, 200, 200));
+    auto glass = new Node("glass", Rect(0, 0, 200, 200));
+    auto label = new Node("label", Rect(50, 50, 40, 20));
+    root.add(under);
+    root.add(glass);
+    glass.add(label);
+
+    assert(root.hitTest(Point(60, 60)) is label, "the topmost thing there");
+
+    glass.isHitTestVisible = false;
+    assert(root.hitTest(Point(60, 60)) is under,
+           "the layer is gone and its label with it, so what is behind answers");
+
+    // And it is only about the mouse: the layer is still drawn, and still asks
+    // to be drawn again.
+    renderLog = null;
+    root.renderSubtree(new RecordingContext);
+    assert(renderLog == ["root", "under", "glass", "label"]);
+
+    glass.isHitTestVisible = true;
+    assert(root.hitTest(Point(60, 60)) is label);
+}
+
+unittest
+{
+    // On by default, and an ordinary property in every other respect.
+    auto node = new Node;
+
+    assert(node.isHitTestVisible);
+    assert(!node.hasLocalValue(Visual.isHitTestVisibleProperty));
+
+    node.isHitTestVisible = false;
+    assert(node.hasLocalValue(Visual.isHitTestVisibleProperty));
+
+    node.clearValue(Visual.isHitTestVisibleProperty);
+    assert(node.isHitTestVisible);
 }
