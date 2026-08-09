@@ -94,6 +94,21 @@ final class Win32Window : PlatformWindow
         InvalidateRect(_hwnd, &rect, FALSE);
     }
 
+    void captureMouse()
+    {
+        SetCapture(_hwnd);
+    }
+
+    void releaseMouseCapture()
+    {
+        // Only if it is still ours.  ReleaseCapture is process-wide, so calling
+        // it while somebody else holds the mouse would take it from them -- and
+        // the usual reason we no longer have it is that WM_CAPTURECHANGED has
+        // already been and gone.
+        if (GetCapture() is _hwnd)
+            ReleaseCapture();
+    }
+
     void setClientSize(int width, int height)
     {
         auto rect = RECT(0, 0, width, height);
@@ -194,6 +209,12 @@ private:
             case WM_MOUSEMOVE:
                 trackMouseLeave(hwnd);
                 notify({ _host.onMouseMove(mouseX(lParam), mouseY(lParam)); });
+                return 0;
+
+            case WM_CAPTURECHANGED:
+                // Sent whoever took it away, including ourselves -- which is
+                // what makes it the one place the host can trust.
+                notify({ _host.onMouseCaptureLost(); });
                 return 0;
 
             case WM_MOUSELEAVE:

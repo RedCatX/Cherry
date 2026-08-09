@@ -83,6 +83,32 @@ final class TestPlatformWindow : PlatformWindow
         return all;
     }
 
+   /**
+    * How many times the mouse was captured and released, and whether it is
+    * held now.
+    *
+    * Counted rather than merely flagged, because the failure worth catching is
+    * a capture taken twice or released on a path that already released it --
+    * neither of which a boolean would show.
+    */
+    int captures;
+    /// ditto
+    int releases;
+    /// ditto
+    bool mouseCaptured;
+
+    void captureMouse()
+    {
+        captures++;
+        mouseCaptured = true;
+    }
+
+    void releaseMouseCapture()
+    {
+        releases++;
+        mouseCaptured = false;
+    }
+
     void setClientSize(int w, int h)
     {
         width = w;

@@ -302,6 +302,19 @@ private:
         {
             this.outer.handleMouseLeave();
         }
+
+        void onMouseCaptureLost()
+        {
+            this.outer.handleMouseCaptureLost();
+        }
+    }
+
+   /*
+    * The platform took the pointer back, so whoever was holding it is told and
+    * forgotten.  Nothing is asked of the platform here: it has already done it.
+    */
+    void handleMouseCaptureLost()
+    {
     }
 
    /*

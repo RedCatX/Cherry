@@ -72,6 +72,18 @@ interface PlatformWindowHost
     void onMouseMove(int x, int y);
 
    /**
+    * The window no longer has the pointer, whether it gave it up or something
+    * took it.
+    *
+    * The platform takes capture away on its own for reasons the host cannot
+    * see -- another window is shown, the task switcher opens, a menu comes up,
+    * anything at all calls ReleaseCapture.  So this is the only trustworthy end
+    * of a capture, and a host that undid its own state on the button release
+    * alone would be left holding a pressed button after an Alt+Tab.
+    */
+    void onMouseCaptureLost();
+
+   /**
     * The pointer left the client area, and no position comes with it because
     * there is none to give -- it is somewhere else now.
     *
@@ -124,6 +136,22 @@ interface PlatformWindow
     * nothing and must be honoured as such.
     */
     void invalidate(Rect region);
+
+   /**
+    * Sends every mouse message to this window until the capture is given up,
+    * wherever the pointer goes.
+    *
+    * What makes a button survive being pressed, dragged off and released
+    * somewhere else: without it the release lands on whatever is under the
+    * pointer and the button never learns it is no longer pressed.
+    *
+    * Releasing is asking, not telling: the platform may already have taken it
+    * away, and either way onMouseCaptureLost is what says it is over.
+    */
+    void captureMouse();
+
+    /// ditto
+    void releaseMouseCapture();
 
     @property int clientWidth();
     @property int clientHeight();
