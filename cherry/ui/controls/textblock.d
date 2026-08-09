@@ -19,6 +19,7 @@ import cherry.platform : systemTextFormat, textService;
 import cherry.platform.render : Color, DrawingContext, FontStyle, FontWeight, Point,
                                 Size, TextFormat, TextLayout, TextRendering, TextWrapping;
 import cherry.ui.element;
+import cherry.ui.media.brush : Brush, SolidColorBrush;
 
 /**
  * Draws a run of text.
@@ -109,16 +110,23 @@ class TextBlock : Element
         textRenderingProperty = Property.register("TextRendering",
             getRtti!TextRendering(), getRtti!TextBlock(), renderingMeta);
 
-        // The colour is the one thing here that changes nothing about how much
+        // The ink is the one thing here that changes nothing about how much
         // room the text needs -- the glyphs are in the same places, in a
-        // different ink.  affectsRender is exactly that statement, and this is
-        // the first property in the framework entitled to make it.
+        // different colour.  affectsRender is exactly that statement, and this
+        // is the first property in the framework entitled to make it.
+        //
+        // Unset by default rather than holding a black brush, and that is
+        // forced rather than chosen: a brush is a CherryObject, a CherryObject
+        // binds to its thread's dispatcher when it is built, and a module
+        // constructor is much too early to raise a dispatcher and its event
+        // loop.  Unset means the default ink, resolved when there is something
+        // to draw.
         PropertyMetadata foregroundMeta;
-        foregroundMeta.defaultValue = Value(Color.black);
+        foregroundMeta.defaultValue = Value.init;
         foregroundMeta.affectsRender = true;
 
         foregroundProperty = Property.register("Foreground",
-            getRtti!Color(), getRtti!TextBlock(), foregroundMeta);
+            getRtti!Brush(), getRtti!TextBlock(), foregroundMeta);
     }
 
     static immutable(Property) textProperty;
@@ -239,14 +247,29 @@ class TextBlock : Element
         setValue(textRenderingProperty, Value(value));
     }
 
-    /// The ink.  Black until there are system colours to ask.
-    @property Color foreground() const
+   /**
+    * What to write with, or null for the default ink.
+    *
+    * Null is the ordinary state, exactly as an unset Width is: it means "black,
+    * until there are system colours to ask", and the brush that stands for it
+    * is made when the text is first drawn.  Reading this back gives null rather
+    * than that brush, because the element was never told to use one -- the same
+    * answer Width gives, for the same reason.
+    *
+    * Assigning a brush and later changing that brush's colour does **not**
+    * repaint this element today: affectsRender fires when the property changes,
+    * and a colour inside an object it already holds is not a change to the
+    * property.  Fixing it means the element subscribing to its brush, which is
+    * its own piece of work; until then, assign a different brush.
+    */
+    @property Brush foreground() const
     {
-        return getValue(foregroundProperty).get!Color;
+        auto value = getValue(foregroundProperty);
+        return value.empty ? null : cast(Brush) value.get!Brush;
     }
 
     /// ditto
-    @property void foreground(Color value)
+    @property void foreground(Brush value)
     {
         setValue(foregroundProperty, Value(value));
     }
@@ -298,7 +321,18 @@ protected:
         if (_layout is null)
             return;
 
-        context.drawText(_layout, Point(0, 0), foreground);
+        auto ink = foreground;
+        if (ink is null)
+        {
+            // Made once and kept, because onRender runs on every frame and a
+            // brush per frame would be a brush per frame.
+            if (_defaultInk is null)
+                _defaultInk = new SolidColorBrush(Color.black);
+
+            ink = _defaultInk;
+        }
+
+        context.drawText(_layout, Point(0, 0), ink);
     }
 
 private:
@@ -340,6 +374,11 @@ private:
 
         return _layout;
     }
+
+    // Stands in for an unset Foreground.  Per element rather than shared: a
+    // brush handed out from one place could be mutated by anybody holding it,
+    // and every TextBlock in the application would change colour.
+    SolidColorBrush _defaultInk;
 
     TextLayout _layout;
     string     _layoutText;
@@ -426,7 +465,7 @@ unittest
     assert(label.textWrapping == TextWrapping.noWrap);
     assert(label.textRendering == TextRendering.display,
            "drawn the way a Win32 control is, until a theme says otherwise");
-    assert(label.foreground == Color.black);
+    assert(label.foreground is null, "no ink of its own, which means the default one");
 
     // And the assembled request is the parts, unchanged.
     immutable f = label.format;
@@ -630,7 +669,7 @@ unittest
             surface.repaints = null;
             immutable builtSoFar = fake.created;
 
-            label.foreground = Color.rgb(1, 0, 0);
+            label.foreground = new SolidColorBrush(Color.rgb(1, 0, 0));
 
             assert(label.isMeasureValid && label.isArrangeValid,
                    "different ink, same glyphs in the same places");

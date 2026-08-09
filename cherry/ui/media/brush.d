@@ -340,3 +340,37 @@ unittest
     brush.above = null;
     assert(brush.getValue(accent).get!int == 10, "cut off from the tree, cut off from the value");
 }
+
+unittest
+{
+    // A brush is what a drawing context is handed, and the whole of what the
+    // drawing model can see of it is the Paint side.  This is that seam read
+    // from the outside: the model's vocabulary, answered by the object's.
+    import cherry.platform.render : RecordingContext, Rect;
+
+    auto flat = new SolidColorBrush(Color.rgb(0.2, 0.4, 0.6));
+    auto ramp = new LinearGradientBrush(Color.rgb(1, 0, 0), Color.rgb(0, 0, 1));
+    ramp.end = Point(1, 0);
+    ramp.spread = GradientSpread.repeat;
+
+    auto context = new RecordingContext;
+    context.fillRectangle(Rect(0, 0, 100, 50), flat);
+    context.fillRectangle(Rect(0, 0, 100, 50), ramp);
+
+    // A flat paint resolves to its colour, which is what almost every test
+    // wants to read.
+    assert(context.entries[0].color == Color.rgb(0.2, 0.4, 0.6));
+    assert(cast(SolidPaint) context.entries[0].paint !is null);
+
+    // A gradient has no one colour, so it says so and is read through its own
+    // side of the seam.
+    assert(context.entries[1].color == Color.transparent,
+           "no single colour stands for a ramp");
+
+    auto seen = cast(GradientPaint) context.entries[1].paint;
+    assert(seen !is null);
+    assert(seen.start == Point(0, 0) && seen.end == Point(1, 0), "left to right");
+    assert(seen.spread == GradientSpread.repeat);
+    assert(seen.stops.length == 2 && seen.stops[1].color == Color.rgb(0, 0, 1));
+    assert(seen.revision == ramp.revision);
+}

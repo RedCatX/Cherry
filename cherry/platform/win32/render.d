@@ -158,6 +158,12 @@ private:
 
     void releaseTarget()
     {
+        // Before the context goes: every gradient it cached belongs to this
+        // target and dies with it.  A cache that outlived the device would hand
+        // out brushes built against a device that no longer exists.
+        if (_context !is null)
+            _context.releaseGradients();
+
         _context = null;
 
         if (_displayParams !is null)
@@ -221,34 +227,56 @@ private final class D2DDrawingContext : DrawingContext
         _target.Clear(&value);
     }
 
-    void fillRectangle(Rect rect, Color color)
+    void fillRectangle(Rect rect, Paint paint)
     {
-        auto area = toRectF(rect);
-        _target.FillRectangle(&area, recolor(color));
+        if (auto brush = deviceBrush(paint, rect))
+        {
+            auto area = toRectF(rect);
+            _target.FillRectangle(&area, brush);
+        }
     }
 
-    void drawRectangle(Rect rect, Color color, float strokeWidth = 1)
+    void drawRectangle(Rect rect, Paint paint, float strokeWidth = 1)
     {
-        auto area = toRectF(rect);
-        _target.DrawRectangle(&area, recolor(color), strokeWidth, null);
+        if (auto brush = deviceBrush(paint, rect))
+        {
+            auto area = toRectF(rect);
+            _target.DrawRectangle(&area, brush, strokeWidth, null);
+        }
     }
 
-    void fillEllipse(Rect bounds, Color color)
+    void fillEllipse(Rect bounds, Paint paint)
     {
-        auto ellipse = toEllipse(bounds);
-        _target.FillEllipse(&ellipse, recolor(color));
+        if (auto brush = deviceBrush(paint, bounds))
+        {
+            auto ellipse = toEllipse(bounds);
+            _target.FillEllipse(&ellipse, brush);
+        }
     }
 
-    void drawEllipse(Rect bounds, Color color, float strokeWidth = 1)
+    void drawEllipse(Rect bounds, Paint paint, float strokeWidth = 1)
     {
-        auto ellipse = toEllipse(bounds);
-        _target.DrawEllipse(&ellipse, recolor(color), strokeWidth, null);
+        if (auto brush = deviceBrush(paint, bounds))
+        {
+            auto ellipse = toEllipse(bounds);
+            _target.DrawEllipse(&ellipse, brush, strokeWidth, null);
+        }
     }
 
-    void drawLine(Point from, Point to, Color color, float strokeWidth = 1)
+    void drawLine(Point from, Point to, Paint paint, float strokeWidth = 1)
     {
-        _target.DrawLine(D2D1_POINT_2F(from.x, from.y), D2D1_POINT_2F(to.x, to.y),
-                         recolor(color), strokeWidth, null);
+        // A gradient reads its ends as fractions of what is being filled, and
+        // for a line that is the box the segment spans.  A line running the
+        // other way therefore gets the ramp the other way round, which is what
+        // anybody drawing one would expect.
+        immutable span = Rect(from.x < to.x ? from.x : to.x,
+                              from.y < to.y ? from.y : to.y,
+                              from.x < to.x ? to.x - from.x : from.x - to.x,
+                              from.y < to.y ? to.y - from.y : from.y - to.y);
+
+        if (auto brush = deviceBrush(paint, span))
+            _target.DrawLine(D2D1_POINT_2F(from.x, from.y), D2D1_POINT_2F(to.x, to.y),
+                             brush, strokeWidth, null);
     }
 
    /**
@@ -259,17 +287,23 @@ private final class D2DDrawingContext : DrawingContext
     * than skipped: it means the caller measured with one service and drew with
     * another, and text that silently fails to appear is a long afternoon.
     */
-    void drawText(TextLayout layout, Point origin, Color color)
+    void drawText(TextLayout layout, Point origin, Paint paint)
     {
         auto native = cast(DWriteTextLayout) layout;
         if (native is null || native.native is null)
             throw new Exception("Direct2D can only draw a layout made by the "
                                 ~ "DirectWrite text service, and not a disposed one.");
 
+        immutable box = Rect(origin.x, origin.y, layout.size.width, layout.size.height);
+
+        auto brush = deviceBrush(paint, box);
+        if (brush is null)
+            return;
+
         applyRenderingParams(layout.format.rendering);
 
         _target.DrawTextLayout(D2D1_POINT_2F(origin.x, origin.y),
-                               cast(void*) native.native, recolor(color),
+                               cast(void*) native.native, brush,
                                D2D1_DRAW_TEXT_OPTIONS_NONE);
     }
 
@@ -336,6 +370,130 @@ private:
     }
 
    /*
+    * The Direct2D brush for a paint, ready to fill the given geometry.
+    *
+    * A solid paint gets no cache at all -- the one shared brush is recoloured,
+    * exactly as before there were paints.  That is the path almost every fill
+    * takes, and it stays as cheap as it was.
+    *
+    * A paint of a kind this backend has never heard of gets null, and the
+    * caller draws nothing.  Refusing quietly is right here: the drawing model
+    * may grow a kind before this backend does, and a window that threw would
+    * take down the frame over a fill it could have skipped.
+    */
+    ID2D1Brush deviceBrush(Paint paint, Rect bounds)
+    {
+        if (auto solid = cast(SolidPaint) paint)
+            return recolor(solid.color);
+
+        if (auto gradient = cast(GradientPaint) paint)
+            return linearGradientBrush(gradient, bounds);
+
+        return null;
+    }
+
+   /*
+    * The cached gradient brush for a paint, rebuilt when the paint says it has
+    * changed and re-aimed at the geometry on every call.
+    *
+    * Two things happen here and they are worth telling apart.  The stop
+    * collection and the brush are expensive and are built once per paint, kept
+    * until its revision moves or the target goes.  The start and end points are
+    * cheap and are set on every fill, because they are fractions of what is
+    * being filled and the same brush paints a button and a window differently.
+    *
+    * The cache holds its paints alive until the target is released, so a brush
+    * used once and dropped keeps a device resource for the life of the window.
+    * That is worth fixing when there is something to measure; it is bounded by
+    * how many distinct gradients an application makes, which is small.
+    */
+    ID2D1Brush linearGradientBrush(GradientPaint paint, Rect bounds)
+    {
+        auto key = cast(Object) paint;
+        auto cached = key in _gradients;
+
+        if (cached is null || cached.revision != paint.revision)
+        {
+            if (cached !is null)
+                cached.brush.Release();
+
+            auto made = createGradientBrush(paint);
+            if (made is null)
+            {
+                if (cached !is null)
+                    _gradients.remove(key);
+
+                return null;
+            }
+
+            _gradients[key] = CachedGradient(made, paint.revision);
+            cached = key in _gradients;
+        }
+
+        cached.brush.SetStartPoint(D2D1_POINT_2F(bounds.x + paint.start.x * bounds.width,
+                                                 bounds.y + paint.start.y * bounds.height));
+        cached.brush.SetEndPoint(D2D1_POINT_2F(bounds.x + paint.end.x * bounds.width,
+                                               bounds.y + paint.end.y * bounds.height));
+
+        return cached.brush;
+    }
+
+   /*
+    * Builds the stop collection and the brush, or null if the paint has no
+    * colours to ramp between -- Direct2D refuses an empty collection, and a
+    * gradient of nothing has nothing to draw anyway.
+    *
+    * The placeholder ends are replaced before every fill; what matters at
+    * creation is only that they are valid numbers.
+    */
+    ID2D1LinearGradientBrush createGradientBrush(GradientPaint paint)
+    {
+        auto stops = paint.stops;
+        if (stops.length == 0)
+            return null;
+
+        auto native = new D2D1_GRADIENT_STOP[stops.length];
+        foreach (i, stop; stops)
+            native[i] = D2D1_GRADIENT_STOP(stop.offset, toColorF(stop.color));
+
+        ID2D1GradientStopCollection collection;
+        auto hr = _target.CreateGradientStopCollection(native.ptr, cast(uint) native.length,
+                                                       D2D1_GAMMA_2_2, toExtendMode(paint.spread),
+                                                       &collection);
+        if (hr != S_OK)
+            return null;
+
+        scope (exit) collection.Release();
+
+        auto properties = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES(D2D1_POINT_2F(0, 0),
+                                                                D2D1_POINT_2F(0, 1));
+
+        ID2D1LinearGradientBrush brush;
+        hr = _target.CreateLinearGradientBrush(&properties, null, collection, &brush);
+
+        return hr == S_OK ? brush : null;
+    }
+
+    static int toExtendMode(GradientSpread spread) pure nothrow @nogc
+    {
+        final switch (spread)
+        {
+            case GradientSpread.pad:     return D2D1_EXTEND_MODE_CLAMP;
+            case GradientSpread.reflect: return D2D1_EXTEND_MODE_MIRROR;
+            case GradientSpread.repeat:  return D2D1_EXTEND_MODE_WRAP;
+        }
+    }
+
+    /// Lets the renderer drop every device resource when the target goes.
+    void releaseGradients()
+    {
+        foreach (entry; _gradients)
+            entry.brush.Release();
+
+        _gradients = null;
+    }
+
+   /*
     * Puts the rasterisation parameters for a rendering mode in effect, and
     * only when they are not already.
     *
@@ -390,10 +548,18 @@ private:
         return D2D1_MATRIX_3X2_F(m.m11, m.m12, m.m21, m.m22, m.dx, m.dy);
     }
 
+    /// One gradient's device resource and the revision it was built from.
+    static struct CachedGradient
+    {
+        ID2D1LinearGradientBrush brush;
+        ulong                    revision;
+    }
+
     ID2D1RenderTarget      _target;
     ID2D1SolidColorBrush   _brush;
     IDWriteRenderingParams _displayParams;
     IDWriteRenderingParams _idealParams;
+    CachedGradient[Object] _gradients;
     TransformStack         _transforms;
 
     // Which mode's parameters the target is carrying, or -1 for "not yet

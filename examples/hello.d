@@ -8,23 +8,41 @@ import cherry.platform;
 
 class HelloWindow : Window
 {
+   /**
+    * The brushes are built once and kept.  A brush is an object with
+    * properties, not a value, so making one per frame would be making one per
+    * frame -- and the backend caches its device resources against the object,
+    * so a fresh brush every time would defeat that too.
+    */
+    this()
+    {
+        _stem = new SolidColorBrush(Color.rgb(0.45, 0.30, 0.12));
+        _leaf = new SolidColorBrush(Color.rgb(0.22, 0.62, 0.28));
+        _dark = new SolidColorBrush(Color.rgb(0.82, 0.06, 0.16));
+        _bright = new SolidColorBrush(Color.rgb(0.90, 0.10, 0.20));
+        _shine = new SolidColorBrush(Color.rgb(1.0, 0.55, 0.60));
+    }
+
     protected override void onRender(DrawingContext context)
     {
         // Stems.
-        context.drawLine(Point(400, 120), Point(330, 270), Color.rgb(0.45, 0.30, 0.12), 6);
-        context.drawLine(Point(400, 120), Point(470, 260), Color.rgb(0.45, 0.30, 0.12), 6);
+        context.drawLine(Point(400, 120), Point(330, 270), _stem, 6);
+        context.drawLine(Point(400, 120), Point(470, 260), _stem, 6);
 
         // A leaf at the join.
-        context.fillEllipse(Rect(392, 96, 110, 44), Color.rgb(0.22, 0.62, 0.28));
+        context.fillEllipse(Rect(392, 96, 110, 44), _leaf);
 
         // The cherries.
-        context.fillEllipse(Rect(265, 265, 130, 130), Color.rgb(0.82, 0.06, 0.16));
-        context.fillEllipse(Rect(405, 255, 140, 140), Color.rgb(0.90, 0.10, 0.20));
+        context.fillEllipse(Rect(265, 265, 130, 130), _dark);
+        context.fillEllipse(Rect(405, 255, 140, 140), _bright);
 
         // Highlights.
-        context.fillEllipse(Rect(295, 290, 28, 22), Color.rgb(1.0, 0.55, 0.60));
-        context.fillEllipse(Rect(440, 285, 30, 24), Color.rgb(1.0, 0.55, 0.60));
+        context.fillEllipse(Rect(295, 290, 28, 22), _shine);
+        context.fillEllipse(Rect(440, 285, 30, 24), _shine);
     }
+
+private:
+    SolidColorBrush _stem, _leaf, _dark, _bright, _shine;
 }
 
 /**
@@ -40,7 +58,8 @@ class Swatch : Element
     this(string name, Color color, float thickness)
     {
         _name = name;
-        _color = color;
+        _plain = new SolidColorBrush(color);
+        _lit = new SolidColorBrush(lighten(color));
         height = thickness;
 
         // The pointer arriving and leaving is all the state a hover needs.
@@ -65,7 +84,7 @@ class Swatch : Element
     protected override void onRender(DrawingContext context)
     {
         context.fillRectangle(Rect(0, 0, actualWidth, actualHeight),
-                              isMouseOver ? lighten(_color) : _color);
+                              isMouseOver ? _lit : _plain);
     }
 
 private:
@@ -76,8 +95,9 @@ private:
                          c.b + (1 - c.b) * 0.45);
     }
 
-    string _name;
-    Color  _color;
+    string          _name;
+    SolidColorBrush _plain;
+    SolidColorBrush _lit;
 }
 
 // The same words in the window and in the system's own dialog, so the two can

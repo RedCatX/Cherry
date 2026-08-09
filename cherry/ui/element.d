@@ -2460,7 +2460,7 @@ unittest
 
 version (unittest)
 {
-    import cherry.platform.render : Color, Point, RecordingContext;
+    import cherry.platform.render : Color, FakeSolidPaint, Point, RecordingContext;
 
    /*
     * Draws its own bounds, which in its own space start at the origin.  What
@@ -2470,7 +2470,7 @@ version (unittest)
     {
         protected override void onRender(DrawingContext context)
         {
-            context.fillRectangle(Rect(0, 0, actualWidth, actualHeight), Color.black);
+            context.fillRectangle(Rect(0, 0, actualWidth, actualHeight), new FakeSolidPaint(Color.black));
         }
     }
 }
@@ -2516,7 +2516,7 @@ unittest
         protected override void onRender(DrawingContext context)
         {
             context.pushTransform(Matrix.scaling(2, 2));
-            context.fillRectangle(Rect(10, 10, 20, 20), Color.black);
+            context.fillRectangle(Rect(10, 10, 20, 20), new FakeSolidPaint(Color.black));
             context.popTransform();
         }
     }

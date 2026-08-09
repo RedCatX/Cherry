@@ -868,20 +868,32 @@ interface DrawingContext
     */
     void clear(Color color);
 
-    /// Fills a rectangle.
-    void fillRectangle(Rect rect, Color color);
+   /**
+    * Fills and strokes, each with a paint rather than a colour.
+    *
+    * A paint that is a gradient reads its ends as fractions of what is being
+    * filled, so every one of these hands the paint its own geometry: the
+    * rectangle for the rectangles and the ellipses, the segment's bounding box
+    * for a line.  That is the whole reason a fill has to know what it is
+    * filling and cannot simply be handed a colour.
+    *
+    * A stroke is a paint and a width and nothing else.  A Pen -- dashes, caps,
+    * joins -- is a thing of its own and is not here yet; when it arrives these
+    * take one instead of the pair.
+    */
+    void fillRectangle(Rect rect, Paint paint);
 
-    /// Strokes a rectangle outline.
-    void drawRectangle(Rect rect, Color color, float strokeWidth = 1);
+    /// ditto
+    void drawRectangle(Rect rect, Paint paint, float strokeWidth = 1);
 
-    /// Fills the ellipse inscribed in the bounding rectangle.
-    void fillEllipse(Rect bounds, Color color);
+    /// ditto
+    void fillEllipse(Rect bounds, Paint paint);
 
-    /// Strokes the ellipse inscribed in the bounding rectangle.
-    void drawEllipse(Rect bounds, Color color, float strokeWidth = 1);
+    /// ditto
+    void drawEllipse(Rect bounds, Paint paint, float strokeWidth = 1);
 
-    /// Strokes a line segment.
-    void drawLine(Point from, Point to, Color color, float strokeWidth = 1);
+    /// ditto
+    void drawLine(Point from, Point to, Paint paint, float strokeWidth = 1);
 
    /**
     * Draws a laid-out run of text, its top left corner at the origin.
@@ -895,7 +907,7 @@ interface DrawingContext
     * entitled to insist on its own kind and to say so loudly, because the
     * alternative is drawing nothing and leaving the caller to wonder.
     */
-    void drawText(TextLayout layout, Point origin, Color color);
+    void drawText(TextLayout layout, Point origin, Paint paint);
 
    /**
     * Enters a coordinate space of its own, expressed in the one in effect.
@@ -960,6 +972,27 @@ interface WindowRenderer
 version (unittest)
 {
    /**
+    * The smallest thing that is a paint: one colour that never changes.
+    *
+    * Every test that draws needs something to draw with, and the real brushes
+    * live in cherry.ui -- which this module sits below and must not import.
+    * This is what a test paints with, here and in the layers above.
+    */
+    class FakeSolidPaint : SolidPaint
+    {
+        this(Color color)
+        {
+            _color = color;
+        }
+
+        @property ulong revision() const { return 1; }
+        @property Color color() const { return _color; }
+
+    private:
+        Color _color;
+    }
+
+   /**
     * A DrawingContext that writes down what was drawn and where it landed.
     *
     * Every primitive is recorded with the current transform already applied,
@@ -987,6 +1020,14 @@ version (unittest)
             Rect   rect;
             Point  from;
             Point  to;
+           /**
+            * The colour the paint resolved to, for a solid one -- and
+            * Color.transparent for anything else.
+            *
+            * Kept beside the paint rather than replaced by it because almost
+            * every test is about a flat fill and would rather read a colour
+            * than cast an interface.  A gradient test reads `paint`.
+            */
             Color  color;
             float  strokeWidth = 0;
             Matrix transform;
@@ -1001,6 +1042,9 @@ version (unittest)
             * reason.
             */
             string content;
+
+            /// What was actually asked for, whatever kind it turned out to be.
+            Paint  paint;
         }
 
         Entry[] entries;
@@ -1011,32 +1055,33 @@ version (unittest)
                              color, 0, _transforms.current);
         }
 
-        void fillRectangle(Rect rect, Color color)
+        void fillRectangle(Rect rect, Paint paint)
         {
-            record(Kind.fillRectangle, rect, color, 0);
+            record(Kind.fillRectangle, rect, paint, 0);
         }
 
-        void drawRectangle(Rect rect, Color color, float strokeWidth = 1)
+        void drawRectangle(Rect rect, Paint paint, float strokeWidth = 1)
         {
-            record(Kind.drawRectangle, rect, color, strokeWidth);
+            record(Kind.drawRectangle, rect, paint, strokeWidth);
         }
 
-        void fillEllipse(Rect bounds, Color color)
+        void fillEllipse(Rect bounds, Paint paint)
         {
-            record(Kind.fillEllipse, bounds, color, 0);
+            record(Kind.fillEllipse, bounds, paint, 0);
         }
 
-        void drawEllipse(Rect bounds, Color color, float strokeWidth = 1)
+        void drawEllipse(Rect bounds, Paint paint, float strokeWidth = 1)
         {
-            record(Kind.drawEllipse, bounds, color, strokeWidth);
+            record(Kind.drawEllipse, bounds, paint, strokeWidth);
         }
 
-        void drawLine(Point from, Point to, Color color, float strokeWidth = 1)
+        void drawLine(Point from, Point to, Paint paint, float strokeWidth = 1)
         {
             entries ~= Entry(Kind.line, Rect.init,
                              _transforms.current.transform(from),
                              _transforms.current.transform(to),
-                             color, strokeWidth, _transforms.current);
+                             resolveColor(paint), strokeWidth, _transforms.current,
+                             null, paint);
         }
 
        /*
@@ -1045,13 +1090,13 @@ version (unittest)
         * reads a swatch's, and never has to add the layout's size to an
         * origin for itself.
         */
-        void drawText(TextLayout layout, Point origin, Color color)
+        void drawText(TextLayout layout, Point origin, Paint paint)
         {
             immutable box = Rect(origin.x, origin.y, layout.size.width, layout.size.height);
 
             entries ~= Entry(Kind.text, mapBounds(_transforms.current, box),
-                             Point.init, Point.init, color, 0, _transforms.current,
-                             layout.text);
+                             Point.init, Point.init, resolveColor(paint), 0,
+                             _transforms.current, layout.text, paint);
         }
 
         void pushTransform(Matrix transform) { _transforms.push(transform); }
@@ -1062,11 +1107,23 @@ version (unittest)
         @property size_t depth() { return _transforms.depth; }
 
     private:
-        void record(Kind kind, Rect rect, Color color, float strokeWidth)
+        void record(Kind kind, Rect rect, Paint paint, float strokeWidth)
         {
             entries ~= Entry(kind, mapBounds(_transforms.current, rect),
-                             Point.init, Point.init, color, strokeWidth,
-                             _transforms.current);
+                             Point.init, Point.init, resolveColor(paint), strokeWidth,
+                             _transforms.current, null, paint);
+        }
+
+       /*
+        * What a solid paint is made of, and transparent for anything a flat
+        * colour cannot stand for.
+        */
+        static Color resolveColor(Paint paint)
+        {
+            if (auto solid = cast(SolidPaint) paint)
+                return solid.color;
+
+            return Color.transparent;
         }
 
        /*
@@ -1234,16 +1291,21 @@ unittest
 
     auto context = new RecordingContext;
 
+    auto ink = new FakeSolidPaint(Color.black);
+
     context.pushTransform(Matrix.translation(30, 40));
-    context.drawText(layout, Point(5, 5), Color.black);
+    context.drawText(layout, Point(5, 5), ink);
     context.popTransform();
 
     assert(context.entries.length == 1);
 
-    immutable entry = context.entries[0];
+    // Not immutable any more: an Entry carries a Paint now, and a class
+    // reference does not convert to immutable on its own.
+    auto entry = context.entries[0];
     assert(entry.kind == RecordingContext.Kind.text);
     assert(entry.content == "Cherry", "and a test can say which label it is reading");
     assert(entry.rect == Rect(35, 45, 6 * 7, 16),
            "the origin moved by the transform, and the box is the layout's own size");
-    assert(entry.color == Color.black);
+    assert(entry.color == Color.black, "resolved from the paint, because it is a flat one");
+    assert(entry.paint is ink, "and the paint itself is on the record too");
 }

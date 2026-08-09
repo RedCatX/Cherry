@@ -1179,14 +1179,14 @@ unittest
 
 version (unittest)
 {
-    import cherry.platform.render : RecordingContext;
+    import cherry.platform.render : FakeSolidPaint, RecordingContext;
 
    /// Draws its own bounds, so a test can read back where they landed.
     private static class RenderMarker : Element
     {
         protected override void onRender(DrawingContext context)
         {
-            context.fillRectangle(Rect(0, 0, actualWidth, actualHeight), Color.black);
+            context.fillRectangle(Rect(0, 0, actualWidth, actualHeight), new FakeSolidPaint(Color.black));
         }
     }
 }
