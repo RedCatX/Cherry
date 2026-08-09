@@ -608,13 +608,13 @@ interface Paint
     * every field, rebuilding every frame -- is either wrong or slow, and
     * anything richer would mean the paint knowing who is caching it.
     */
-    @property ulong revision();
+    @property ulong revision() const;
 }
 
 /// A paint that is one colour everywhere.
 interface SolidPaint : Paint
 {
-    @property Color color();
+    @property Color color() const;
 }
 
 /**
@@ -632,15 +632,15 @@ interface SolidPaint : Paint
  */
 interface GradientPaint : Paint
 {
-    @property Point start();
+    @property Point start() const;
     /// ditto
-    @property Point end();
+    @property Point end() const;
 
     /// The ramp, in the order it was given.
-    @property const(GradientStop)[] stops();
+    @property const(GradientStop)[] stops() const;
 
     /// What happens outside the span between the ends.
-    @property GradientSpread spread();
+    @property GradientSpread spread() const;
 }
 
 unittest

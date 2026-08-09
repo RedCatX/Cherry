@@ -803,6 +803,10 @@
      <File path="cherry\ui\controls\stackpanel.d" />
      <File path="cherry\ui\controls\textblock.d" />
     </Folder>
+    <Folder name="media">
+     <File path="cherry\ui\media\brush.d" />
+     <File path="cherry\ui\media\package.d" />
+    </Folder>
     <File path="cherry\ui\application.d" />
     <File path="cherry\ui\element.d" />
     <File path="cherry\ui\event.d" />
