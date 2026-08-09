@@ -33,6 +33,19 @@ import cherry.ui.input;
  * of having no content model, and the first thing a ContentPresenter will take
  * over.
  *
+ * **It marks MouseDown and MouseUp as handled**, because a press on a button is
+ * not also a press on whatever the button sits in.  The consequence catches
+ * people out: a handled event skips every handler after it on the same
+ * element, and this class subscribes its own in its constructor -- so a handler
+ * added to a button's MouseDown afterwards never runs.  WPF's ButtonBase does
+ * exactly this and answers it the same way: watch IsPressed and IsMouseOver, or
+ * use Click.  Both are properties, so both report through onPropertyChanged,
+ * which is where a style trigger will hang when there are styles.
+ *
+ * (What WPF has and this does not is a class-handler tier, which would let the
+ * control handle an event without standing in the instance handlers' queue.
+ * Worth adding the day something needs to listen ahead of a control.)
+ *
  * Not here yet: the keyboard.  Space and Enter do not press it, there is no
  * focus to give it, and IsDefault and IsCancel have nothing to hang off.
  */
@@ -373,6 +386,58 @@ unittest
     b.window.platform.host.onMouseDown(MouseButton.left, 50, 20);
     assert(b.button.isPressed);
     assert(windowHeard == 0, "claimed on the way up");
+}
+
+unittest
+{
+    // What an appearance has to hang off, and why it cannot be the mouse
+    // events: the button handles those and marks them handled, so a handler
+    // added afterwards on the same element never runs.  IsPressed and
+    // IsMouseOver report through onPropertyChanged instead, and they report
+    // every change.
+    static class Watcher : Button
+    {
+        string[] seen;
+
+        protected override void onPropertyChanged(immutable(Property) property,
+                                                  ref immutable(PropertyMetadata) metadata,
+                                                  const(Value) oldValue,
+                                                  const(Value) newValue)
+        {
+            super.onPropertyChanged(property, metadata, oldValue, newValue);
+
+            if (property is Button.isPressedProperty)
+                seen ~= newValue.get!bool ? "pressed" : "released";
+            else if (property is Element.isMouseOverProperty)
+                seen ~= newValue.get!bool ? "over" : "out";
+        }
+    }
+
+    auto w = makeWindow();
+
+    auto button = new Watcher;
+    button.width = 100;
+    button.height = 40;
+    button.horizontalAlignment = HorizontalAlignment.left;
+    button.verticalAlignment = VerticalAlignment.top;
+    w.window.addChild(button);
+    w.window.updateLayout();
+
+    int afterwards;
+    button.onMouseDown ~= (Element sender, RoutedEventArgs args) { ++afterwards; };
+
+    w.platform.host.onMouseMove(50, 20);
+    w.platform.host.onMouseDown(MouseButton.left, 50, 20);
+    w.platform.host.onMouseMove(300, 200);
+    w.platform.host.onMouseMove(50, 20);
+    w.platform.host.onMouseUp(MouseButton.left, 50, 20);
+
+    assert(button.seen == ["over", "pressed", "out", "released", "over", "pressed", "released"],
+           "every crossing and every press, in the order they happened");
+
+    assert(afterwards == 0,
+           "and the handler added after the button's own never saw the press -- "
+           ~ "which is why an appearance must not be hung off these events");
 }
 
 unittest
