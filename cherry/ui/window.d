@@ -9,6 +9,7 @@ import cherry.platform;
 import cherry.ui.element;
 import cherry.ui.event;
 import cherry.ui.input;
+import cherry.ui.visual : Visual;
 
 
 /**
@@ -28,10 +29,11 @@ alias WindowClosingHandler = void delegate(Window window, ref bool cancel);
  * Title, width and height are dependency properties; changing them pushes
  * the new values to the platform, and platform-driven changes (the user
  * resizing the window) flow back into the properties without echoing.
- * Native input arrives through a private PlatformWindowHost adapter and is
- * raised as routed events on this element (hit-testing will pick a deeper
- * target once layout exists), so the platform plumbing does not leak into
- * the window's public API.
+ * Native input arrives through a private PlatformWindowHost adapter, is
+ * hit-tested against the tree, and is raised as a routed event on the deepest
+ * element under the pointer -- so the platform plumbing does not leak into the
+ * window's public API, and a handler on an ancestor still hears it on the way
+ * up.
  */
 class Window : Element
 {
@@ -283,18 +285,55 @@ private:
 
         void onMouseDown(MouseButton button, int x, int y)
         {
-            this.outer.raiseEvent(new MouseEventArgs(mouseDownEvent, button, x, y));
+            this.outer.raiseMouseEvent(mouseDownEvent, button, x, y);
         }
 
         void onMouseUp(MouseButton button, int x, int y)
         {
-            this.outer.raiseEvent(new MouseEventArgs(mouseUpEvent, button, x, y));
+            this.outer.raiseMouseEvent(mouseUpEvent, button, x, y);
         }
 
         void onMouseMove(int x, int y)
         {
-            this.outer.raiseEvent(new MouseEventArgs(mouseMoveEvent, MouseButton.none, x, y));
+            this.outer.raiseMouseEvent(mouseMoveEvent, MouseButton.none, x, y);
         }
+    }
+
+   /*
+    * Raises a mouse event on whatever is under the pointer.
+    *
+    * The route starts at the deepest element and travels up, so a handler on
+    * this window still hears about a click on a button four levels down -- and
+    * hears it with args.source naming the button.  Before there was
+    * hit-testing this raised on the window itself, which made every route one
+    * step long and every bubbling event a direct one in disguise.
+    */
+    void raiseMouseEvent(immutable(RoutedEvent) event, MouseButton button, int x, int y)
+    {
+        hitElement(x, y).raiseEvent(new MouseEventArgs(event, button, x, y));
+    }
+
+   /*
+    * The element under a client-area point, or the window itself.
+    *
+    * A client point needs no adjustment on the way in: hitTest takes its
+    * argument in the visual's parent space, and a window's placement is the
+    * client area's origin.
+    *
+    * The walk up is for a hit that is a Visual and not an Element -- a
+    * lightweight drawing node, once such things exist.  A routed event has to
+    * start at an Element, so the nearest one above the hit is what carries the
+    * route.  Today the loop never takes a second step, because every visual in
+    * the tree is an element; it is here so that adding one that is not cannot
+    * quietly break input.
+    */
+    Element hitElement(float x, float y)
+    {
+        for (Visual v = hitTest(Point(x, y)); v !is null; v = v.visualParent)
+            if (auto element = cast(Element) v)
+                return element;
+
+        return this;
     }
 
     void handleDestroyed()
@@ -578,6 +617,70 @@ unittest
     assert(seen.x == 10 && seen.y == 20);
     assert(seen.source is window);
     assert(!seen.handled);
+}
+
+unittest
+{
+    // A click lands on the deepest element under it and travels up from there,
+    // so a handler on the window hears about it and learns where it started.
+    //
+    // Two bands stacked down the left of a container: the click at (30, 70) is
+    // inside the container and inside the second band.
+    //
+    // Placed by margins rather than by a StackPanel, because nothing in
+    // cherry.ui may import a control -- the banner in controls/stackpanel.d
+    // explains what that rule is protecting, and a test import is still an
+    // import.
+    static class Band : Element
+    {
+        this(float top)
+        {
+            height = 50;
+            margin = Thickness(0, top, 0, 0);
+            verticalAlignment = VerticalAlignment.top;
+        }
+    }
+
+    auto w = makeWindow();
+
+    auto container = new Element;
+    container.width = 100;
+    container.height = 100;
+    container.horizontalAlignment = HorizontalAlignment.left;
+    container.verticalAlignment = VerticalAlignment.top;
+
+    auto first = new Band(0);
+    auto second = new Band(50);
+    container.addChild(first);
+    container.addChild(second);
+    w.window.addChild(container);
+    w.window.updateLayout();
+
+    assert(second.arrangedRect == Rect(0, 50, 100, 50), "the bands do not overlap");
+
+    Element[] route;
+    MouseEventArgs seen;
+
+    w.window.onMouseDown ~= (Element sender, RoutedEventArgs args) {
+        route ~= sender;
+        seen = cast(MouseEventArgs) args;
+    };
+    container.onMouseDown ~= (Element sender, RoutedEventArgs args) { route ~= sender; };
+    second.onMouseDown ~= (Element sender, RoutedEventArgs args) { route ~= sender; };
+    first.onMouseDown ~= (Element sender, RoutedEventArgs args) { route ~= sender; };
+
+    w.platform.host.onMouseDown(MouseButton.left, 30, 70);
+
+    assert(route == [cast(Element) second, container, w.window],
+           "from the band up, and the sibling band never hears it");
+    assert(seen.source is second, "and the args name where it started");
+    assert(seen.getPosition(second) == Point(30, 20), "twenty down into the second band");
+    assert(seen.getPosition(w.window) == Point(30, 70), "which is the client point");
+
+    // Outside the panel there is only the window left to hit.
+    route = null;
+    w.platform.host.onMouseDown(MouseButton.left, 300, 200);
+    assert(route == [cast(Element) w.window]);
 }
 
 unittest
