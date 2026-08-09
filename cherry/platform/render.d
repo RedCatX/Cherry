@@ -733,6 +733,20 @@ interface DrawingContext
     void drawLine(Point from, Point to, Color color, float strokeWidth = 1);
 
    /**
+    * Draws a laid-out run of text, its top left corner at the origin.
+    *
+    * The top left of the box and not the baseline, so that text can be placed
+    * by something that has not measured it -- which is what an element doing
+    * its own arrangement is.  The baseline is inside the layout, where the
+    * font knows where it is.
+    *
+    * The layout must have come from this thread's TextService.  A backend is
+    * entitled to insist on its own kind and to say so loudly, because the
+    * alternative is drawing nothing and leaving the caller to wonder.
+    */
+    void drawText(TextLayout layout, Point origin, Color color);
+
+   /**
     * Enters a coordinate space of its own, expressed in the one in effect.
     *
     * A point p of the new space reaches the current one as `p * transform`,
@@ -805,7 +819,7 @@ version (unittest)
     */
     class RecordingContext : DrawingContext
     {
-        enum Kind { clear, fillRectangle, drawRectangle, fillEllipse, drawEllipse, line }
+        enum Kind { clear, fillRectangle, drawRectangle, fillEllipse, drawEllipse, line, text }
 
        /**
         * One recorded primitive.  rect carries the transformed bounds of the
@@ -825,6 +839,17 @@ version (unittest)
             Color  color;
             float  strokeWidth = 0;
             Matrix transform;
+
+           /**
+            * What was written, for the text kind and nothing else.
+            *
+            * Last, so that the six kinds that came before it still build the
+            * way they always did.  It is here because a test asserting where a
+            * label landed should be able to say which label, and comparing
+            * rectangles to find out is how a test starts passing for the wrong
+            * reason.
+            */
+            string content;
         }
 
         Entry[] entries;
@@ -861,6 +886,21 @@ version (unittest)
                              _transforms.current.transform(from),
                              _transforms.current.transform(to),
                              color, strokeWidth, _transforms.current);
+        }
+
+       /*
+        * Recorded as the box the text occupies, transformed like any other
+        * rectangle -- so a test reads a label's placement the same way it
+        * reads a swatch's, and never has to add the layout's size to an
+        * origin for itself.
+        */
+        void drawText(TextLayout layout, Point origin, Color color)
+        {
+            immutable box = Rect(origin.x, origin.y, layout.size.width, layout.size.height);
+
+            entries ~= Entry(Kind.text, mapBounds(_transforms.current, box),
+                             Point.init, Point.init, color, 0, _transforms.current,
+                             layout.text);
         }
 
         void pushTransform(Matrix transform) { _transforms.push(transform); }
@@ -1031,4 +1071,28 @@ unittest
     plain.dispose();
     plain.dispose();
     assert(service.disposed == 1, "disposing twice is not disposing twice");
+}
+
+unittest
+{
+    // Text is recorded like every other primitive: in the target's own space,
+    // with the transform already applied, and with enough of itself left to
+    // say which run it was.
+    auto service = new FakeTextService;
+    auto layout = service.createLayout("Cherry", TextFormat.init, Size(500, 100));
+
+    auto context = new RecordingContext;
+
+    context.pushTransform(Matrix.translation(30, 40));
+    context.drawText(layout, Point(5, 5), Color.black);
+    context.popTransform();
+
+    assert(context.entries.length == 1);
+
+    immutable entry = context.entries[0];
+    assert(entry.kind == RecordingContext.Kind.text);
+    assert(entry.content == "Cherry", "and a test can say which label it is reading");
+    assert(entry.rect == Rect(35, 45, 6 * 7, 16),
+           "the origin moved by the transform, and the box is the layout's own size");
+    assert(entry.color == Color.black);
 }

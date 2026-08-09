@@ -6,6 +6,8 @@ import core.sys.windows.windows;
 
 import cherry.platform.render;
 import cherry.platform.win32.d2d1;
+import cherry.platform.win32.dwrite;
+import cherry.platform.win32.text : DWriteTextLayout, dwriteFactory;
 
 /**
  * Direct2D implementation of WindowRenderer over an ID2D1HwndRenderTarget.
@@ -108,12 +110,67 @@ private:
         if (hr != S_OK)
             throw new Exception("Failed to create the Direct2D brush.");
 
-        _context = new D2DDrawingContext(_target, _brush);
+        createRenderingParams();
+
+        _context = new D2DDrawingContext(_target, _brush, _displayParams, _idealParams);
+    }
+
+   /*
+    * The rasterisation half of looking like the system.
+    *
+    * The monitor's own parameters are the user's ClearType settings for the
+    * screen this window is on -- gamma, contrast, how much colour fringing to
+    * allow, which way round the subpixels are.  They come from the tuner in
+    * Control Panel, and text drawn without them is text that does not match
+    * anything else on the desktop however right the font is.
+    *
+    * Those are what TextRendering.ideal draws with.  For display everything is
+    * kept except the rendering mode, which becomes GDI_CLASSIC: this user's
+    * ClearType, rasterised the way a Win32 control rasterises it.  Overriding
+    * the mode alone is the point -- a fixed set of parameters would be somebody
+    * else's screen.
+    *
+    * Failure is not fatal.  Direct2D has defaults, and text drawn with them is
+    * merely not tuned; a window that would not open because the ClearType
+    * settings could not be read would be a worse answer.
+    *
+    * Not re-made when the window is dragged to another monitor.  The settings
+    * are per-screen, so the day that matters is the day WM_DPICHANGED is
+    * handled, and both belong to the same piece of work.
+    */
+    void createRenderingParams()
+    {
+        auto factory = dwriteFactory();
+
+        auto hr = factory.CreateMonitorRenderingParams(
+            MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST), &_idealParams);
+
+        if (hr != S_OK && factory.CreateRenderingParams(&_idealParams) != S_OK)
+            return;
+
+        factory.CreateCustomRenderingParams(_idealParams.GetGamma(),
+                                            _idealParams.GetEnhancedContrast(),
+                                            _idealParams.GetClearTypeLevel(),
+                                            _idealParams.GetPixelGeometry(),
+                                            DWRITE_RENDERING_MODE_GDI_CLASSIC,
+                                            &_displayParams);
     }
 
     void releaseTarget()
     {
         _context = null;
+
+        if (_displayParams !is null)
+        {
+            _displayParams.Release();
+            _displayParams = null;
+        }
+
+        if (_idealParams !is null)
+        {
+            _idealParams.Release();
+            _idealParams = null;
+        }
 
         if (_brush !is null)
         {
@@ -128,11 +185,13 @@ private:
         }
     }
 
-    HWND                  _hwnd;
-    ID2D1Factory          _factory;
-    ID2D1HwndRenderTarget _target;
-    ID2D1SolidColorBrush  _brush;
-    D2DDrawingContext     _context;
+    HWND                   _hwnd;
+    ID2D1Factory           _factory;
+    ID2D1HwndRenderTarget  _target;
+    ID2D1SolidColorBrush   _brush;
+    IDWriteRenderingParams _displayParams;
+    IDWriteRenderingParams _idealParams;
+    D2DDrawingContext      _context;
 }
 
 /**
@@ -141,10 +200,13 @@ private:
  */
 private final class D2DDrawingContext : DrawingContext
 {
-    this(ID2D1RenderTarget target, ID2D1SolidColorBrush brush)
+    this(ID2D1RenderTarget target, ID2D1SolidColorBrush brush,
+         IDWriteRenderingParams displayParams, IDWriteRenderingParams idealParams)
     {
         _target = target;
         _brush = brush;
+        _displayParams = displayParams;
+        _idealParams = idealParams;
     }
 
     void clear(Color color)
@@ -189,6 +251,28 @@ private final class D2DDrawingContext : DrawingContext
                          recolor(color), strokeWidth, null);
     }
 
+   /**
+    * Draws a layout DirectWrite already built, through the rasterisation
+    * parameters its rendering mode asks for.
+    *
+    * The layout has to be one of ours, and a foreign one is refused rather
+    * than skipped: it means the caller measured with one service and drew with
+    * another, and text that silently fails to appear is a long afternoon.
+    */
+    void drawText(TextLayout layout, Point origin, Color color)
+    {
+        auto native = cast(DWriteTextLayout) layout;
+        if (native is null || native.native is null)
+            throw new Exception("Direct2D can only draw a layout made by the "
+                                ~ "DirectWrite text service, and not a disposed one.");
+
+        applyRenderingParams(layout.format.rendering);
+
+        _target.DrawTextLayout(D2D1_POINT_2F(origin.x, origin.y),
+                               cast(void*) native.native, recolor(color),
+                               D2D1_DRAW_TEXT_OPTIONS_NONE);
+    }
+
     void pushTransform(Matrix transform)
     {
         _transforms.push(transform);
@@ -223,6 +307,12 @@ private final class D2DDrawingContext : DrawingContext
     {
         _transforms.reset();
         applyTransform();
+
+        // The parameters themselves stay on the target across frames; what is
+        // forgotten here is only which ones this context believes are in
+        // effect, so the first run of text in a frame sets them rather than
+        // trusting a memory of the last one.
+        _appliedRendering = -1;
     }
 
     /// What the renderer asserts on after handing the frame to element code.
@@ -243,6 +333,31 @@ private:
         auto value = toColorF(color);
         _brush.SetColor(&value);
         return _brush;
+    }
+
+   /*
+    * Puts the rasterisation parameters for a rendering mode in effect, and
+    * only when they are not already.
+    *
+    * They are state on the target rather than an argument to the draw, so a
+    * frame mixing the two modes has to switch between runs -- and a frame
+    * using one mode throughout, which is every frame anybody will write for a
+    * while, pays for one call.
+    *
+    * Null parameters mean the settings could not be read; Direct2D's own
+    * defaults then stand, which is the right thing to leave alone.
+    */
+    void applyRenderingParams(TextRendering rendering)
+    {
+        if (_appliedRendering == cast(int) rendering)
+            return;
+
+        auto params = rendering == TextRendering.display ? _displayParams : _idealParams;
+        if (params is null)
+            return;
+
+        _target.SetTextRenderingParams(cast(void*) params);
+        _appliedRendering = cast(int) rendering;
     }
 
     static D2D1_COLOR_F toColorF(Color color) pure nothrow @nogc
@@ -275,7 +390,14 @@ private:
         return D2D1_MATRIX_3X2_F(m.m11, m.m12, m.m21, m.m22, m.dx, m.dy);
     }
 
-    ID2D1RenderTarget    _target;
-    ID2D1SolidColorBrush _brush;
-    TransformStack       _transforms;
+    ID2D1RenderTarget      _target;
+    ID2D1SolidColorBrush   _brush;
+    IDWriteRenderingParams _displayParams;
+    IDWriteRenderingParams _idealParams;
+    TransformStack         _transforms;
+
+    // Which mode's parameters the target is carrying, or -1 for "not yet
+    // said".  An int rather than the enum, because "none of them" is a state
+    // the enum has no business naming.
+    int _appliedRendering = -1;
 }
