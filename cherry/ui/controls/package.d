@@ -14,6 +14,7 @@ module cherry.ui.controls;
  * banner in stackpanel.d spells it out.
  */
 
+public import cherry.ui.controls.button;
 public import cherry.ui.controls.control;
 public import cherry.ui.controls.stackpanel;
 public import cherry.ui.controls.textblock;

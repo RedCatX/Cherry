@@ -799,6 +799,7 @@
    </Folder>
    <Folder name="ui">
     <Folder name="controls">
+     <File path="cherry\ui\controls\button.d" />
      <File path="cherry\ui\controls\control.d" />
      <File path="cherry\ui\controls\package.d" />
      <File path="cherry\ui\controls\stackpanel.d" />
