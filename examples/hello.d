@@ -52,6 +52,10 @@ private:
     Color _color;
 }
 
+// The same words in the window and in the system's own dialog, so the two can
+// be held up against each other.  See the click handler at the bottom.
+private enum sample = "The quick brown fox jumps over the lazy dog.";
+
 void main()
 {
     auto dispatcher = new Dispatcher(createPlatformEventLoop());
@@ -69,6 +73,18 @@ void main()
     stripes.verticalAlignment = VerticalAlignment.top;
     stripes.spacing = 6;
 
+    // Nothing is said about the font, and that is the point: a TextBlock left
+    // alone writes in the face and at the size Windows writes its own menus
+    // in.  Its height is not stated either -- the panel asks the text how tall
+    // it is, and the swatches below start under whatever it answers.
+    auto caption = new TextBlock;
+    caption.text = "Cherry";
+    caption.fontSize = 20;
+    caption.fontWeight = FontWeight.semiBold;
+    caption.margin = Thickness(0, 0, 0, 4);
+
+    stripes.addChild(caption);
+
     stripes.addChild(new Swatch(Color.rgb(0.82, 0.06, 0.16), 40));
     stripes.addChild(new Swatch(Color.rgb(0.90, 0.10, 0.20), 26));
 
@@ -80,9 +96,27 @@ void main()
 
     window.addChild(stripes);
 
+    // A second child of the window, pinned along the bottom.  The window is a
+    // single-cell container, so both children are offered the whole client
+    // area and each takes the part of it its alignment asks for.
+    auto footer = new TextBlock;
+    footer.text = sample;
+    footer.horizontalAlignment = HorizontalAlignment.center;
+    footer.verticalAlignment = VerticalAlignment.bottom;
+    footer.margin = Thickness(0, 0, 0, 12);
+
+    window.addChild(footer);
+
     window.onMouseDown ~= (Element sender, RoutedEventArgs args) {
         auto mouse = cast(MouseEventArgs) args;
         writefln("mouse %s down at (%s, %s)", mouse.button, mouse.x, mouse.y);
+
+        // The same sentence, drawn by the system instead of by us.  A
+        // MessageBox is a classic GDI dialog, which is the picture
+        // TextRendering.display is meant to be indistinguishable from: hold
+        // the box next to the line along the bottom of the window and look at
+        // the letter shapes and the spacing.
+        showMessage("Cherry", sample, MessageKind.information);
     };
 
     // shutdown() is shared -- callable from any thread; run() is not.
