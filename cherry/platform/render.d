@@ -506,6 +506,193 @@ unittest
 }
 
 /**
+ * How heavy the strokes of a face are, on the scale every font format uses.
+ *
+ * The numbers are the weights themselves rather than an ordinal, because they
+ * are the same numbers in OpenType, in CSS, in DirectWrite and in a font's own
+ * name table: 400 is regular and 700 is bold wherever the question is asked.
+ * That also leaves room between the members, so a face at 350 can be named
+ * later without renumbering anything.
+ */
+enum FontWeight
+{
+    thin       = 100,
+    extraLight = 200,
+    light      = 300,
+    semiLight  = 350,
+    normal     = 400,
+    medium     = 500,
+    semiBold   = 600,
+    bold       = 700,
+    extraBold  = 800,
+    black      = 900
+}
+
+/**
+ * Upright, slanted, or a face drawn slanted.
+ *
+ * Oblique and italic are not the same thing and the distinction is the whole
+ * reason there are three: oblique is the upright face sheared over, italic is
+ * a face the designer drew separately, and in a serif family they do not even
+ * have the same letterforms.  A family with no italic falls back to oblique on
+ * its own, so asking for italic is always safe.
+ */
+enum FontStyle
+{
+    normal,
+    oblique,
+    italic
+}
+
+/// Whether a run of text may be broken across lines to fit the room it is in.
+enum TextWrapping
+{
+    noWrap,
+    wrap
+}
+
+/**
+ * Which of the two pictures of "the system font" the text is drawn as.
+ *
+ * There is no single answer on Windows, which is why this is a setting and not
+ * a decision the backend makes quietly.  The desktop of Windows 11 -- its
+ * title bars, Explorer, the Start menu, Edge -- is drawn one way; a MessageBox
+ * and every classic dialog behind it are drawn the other.  Both are the
+ * system, and they do not look alike.
+ *
+ * The names are WPF's TextFormattingMode, and each is one DirectWrite call:
+ *
+ *   display -- CreateGdiCompatibleTextLayout with GDI_CLASSIC rasterisation.
+ *              Glyphs are fitted to the pixel grid and advances are whole
+ *              pixels, so text is crisp and slightly tighter, and identical to
+ *              what a Win32 control puts on the screen.  It is the default,
+ *              because a framework's first controls should be mistakable for
+ *              the platform's.
+ *
+ *   ideal   -- CreateTextLayout with the monitor's own rasterisation.
+ *              Sub-pixel positioning and unrounded advances, so the spacing
+ *              the designer drew survives, and so text that is scaled or
+ *              animated stays proportioned instead of stepping.
+ *
+ * The mode is part of the format rather than a property of the backend
+ * precisely because it changes the measured size: the same string is a
+ * different width in the two, and a decision that changes measurement has to
+ * be visible to whatever measures.
+ *
+ * Deliberately absent: DirectWrite's third answer, GDI_NATURAL -- hinted
+ * glyphs at unrounded advances.  It is literally the useGdiNatural flag of the
+ * same call and is one more member here on the day something wants it.
+ */
+enum TextRendering
+{
+    display,
+    ideal
+}
+
+/**
+ * Everything about how a run of text should look, gathered into one value.
+ *
+ * Not a property value, and it must not become one.  A Value compares a struct
+ * byte for byte, so a struct with a string in it would be compared by the
+ * string's pointer rather than by its characters: two identical family names
+ * built separately would look like a change on every assignment, and every
+ * assignment would invalidate the layout.  Strings on their own compare
+ * structurally, so the parts of this are what a control registers, and the
+ * whole is assembled at the moment it measures.
+ *
+ * An empty family means the system's, which is what makes `TextFormat.init`
+ * plus a size a usable request.
+ */
+struct TextFormat
+{
+    string        family;
+    float         size      = 12;
+    FontWeight    weight    = FontWeight.normal;
+    FontStyle     style     = FontStyle.normal;
+    TextWrapping  wrapping  = TextWrapping.noWrap;
+    TextRendering rendering = TextRendering.display;
+}
+
+/**
+ * A run of text that has been laid out and can report its size and be drawn.
+ *
+ * One object does both on purpose.  Measuring through one path and drawing
+ * through another gives the two a chance to disagree -- about the wrap points,
+ * about the last line's height, about a fallback font chosen for a character
+ * the family does not have -- and the disagreement shows up as text that does
+ * not fit the box the layout was given.  What was measured is what gets drawn
+ * because they are the same object.
+ *
+ * Immutable once made: the format and the room were fixed when it was created,
+ * and a caller that needs different ones asks the service for another.  That is
+ * what lets a control keep one of these across frames and only rebuild it when
+ * something it depends on has really changed.
+ */
+interface TextLayout
+{
+    /// The room the text actually takes, in device-independent coordinates.
+    @property Size size();
+
+    /// What was laid out, and how it was asked for.
+    @property string text();
+
+    /// ditto
+    @property TextFormat format();
+
+   /**
+    * Releases whatever the backend is holding.  Using the layout afterwards is
+    * a programming error.
+    *
+    * Explicit rather than left to the collector, because a backend layout owns
+    * a native object and a control replaces its layout on every change of text
+    * or font -- often enough that waiting for a collection is waiting too long.
+    * An implementation should still survive not being told.
+    */
+    void dispose();
+}
+
+/**
+ * Lays text out and answers how big it is -- the text seam of the PAL.
+ *
+ * Separate from DrawingContext, and it has to be: a context exists only inside
+ * a frame, while measuring happens in the layout pass, long before there is
+ * one and whether or not there is a window at all.  An element that could only
+ * find out how big its text was while drawing could never ask for the right
+ * amount of room.
+ */
+interface TextService
+{
+   /**
+    * Lays the text out for the format given, in the room given.
+    *
+    * `available` is the room the caller has, not a promise about the answer:
+    * a layout that does not wrap reports the width it needs even when that is
+    * more than was offered, because an element that overflows should be seen
+    * doing it.  What the room does decide is where a wrapping layout breaks.
+    *
+    * An infinite dimension is the question "how big would you like to be?",
+    * and is what a measure pass with no constraint passes down.
+    */
+    TextLayout createLayout(string text, TextFormat format, Size available);
+}
+
+unittest
+{
+    // What a format nobody has touched asks for: the system's family at a
+    // readable size, upright, unwrapped, drawn the way a Win32 control is.
+    immutable f = TextFormat.init;
+
+    assert(f.family is null, "empty means the system's, which is a request and not a gap");
+    assert(f.size == 12);
+    assert(f.weight == FontWeight.normal && f.style == FontStyle.normal);
+    assert(f.wrapping == TextWrapping.noWrap);
+    assert(f.rendering == TextRendering.display);
+
+    // The weights are the weights, not an enumeration of them.
+    assert(FontWeight.normal == 400 && FontWeight.bold == 700);
+}
+
+/**
  * The surface elements draw onto during a frame.  Solid colors only for
  * now; brush objects, clips and text join the model as the framework grows.
  *
@@ -717,4 +904,131 @@ version (unittest)
 
         TransformStack _transforms;
     }
+
+   /**
+    * A TextService with metrics made up in advance: every character is seven
+    * wide and every line sixteen high.
+    *
+    * A test about laying text out should be about laying text out.  Measured
+    * against a real font it would be asserting on the machine it happens to be
+    * running on -- on which shell font is installed, on the user's ClearType
+    * settings, on the version of Segoe UI that shipped with this build of
+    * Windows -- and would go red for reasons that have nothing to do with the
+    * code under it.  The real backend is tested separately, against what it
+    * can honestly promise.
+    *
+    * It counts what it hands out and what comes back, which is how a test says
+    * that a control caches its layout instead of building one per pass, and
+    * that it gives the old one back when it does rebuild.
+    */
+    class FakeTextService : TextService
+    {
+        enum charWidth  = 7.0f;
+        enum lineHeight = 16.0f;
+
+        /// How many layouts have been made, and how many disposed.
+        int created;
+        /// ditto
+        int disposed;
+
+        TextLayout createLayout(string text, TextFormat format, Size available)
+        {
+            ++created;
+
+            immutable wraps = format.wrapping == TextWrapping.wrap
+                           && available.width < float.infinity;
+
+            size_t columns = text.length;
+            size_t lines   = 1;
+
+            if (wraps)
+            {
+                // At least one character per line whatever the room, or a
+                // narrow enough box would ask for infinitely many lines.
+                columns = cast(size_t)(available.width / charWidth);
+                if (columns < 1)
+                    columns = 1;
+
+                if (text.length > columns)
+                    lines = (text.length + columns - 1) / columns;
+                else
+                    columns = text.length;
+            }
+
+            // An empty run is not a run of no height: a line is as tall as the
+            // font whether or not anything was typed on it, and a real backend
+            // answers the same way.
+            return new FakeTextLayout(this, text, format,
+                                      Size(columns * charWidth, lines * lineHeight));
+        }
+    }
+
+    /// ditto
+    class FakeTextLayout : TextLayout
+    {
+        this(FakeTextService owner, string text, TextFormat format, Size size)
+        {
+            _owner = owner;
+            _text = text;
+            _format = format;
+            _size = size;
+        }
+
+        @property Size size() { return _size; }
+        @property string text() { return _text; }
+        @property TextFormat format() { return _format; }
+
+        void dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            ++_owner.disposed;
+        }
+
+        /// Whether dispose has been called -- what a leak test looks at.
+        @property bool isDisposed() { return _disposed; }
+
+    private:
+        FakeTextService _owner;
+        string          _text;
+        TextFormat      _format;
+        Size            _size;
+        bool            _disposed;
+    }
+}
+
+unittest
+{
+    // The fake's own arithmetic, so that a test built on it can be read
+    // without working the numbers out again.
+    auto service = new FakeTextService;
+
+    auto plain = service.createLayout("hello", TextFormat.init, Size(500, 100));
+    assert(plain.size == Size(5 * 7, 16));
+    assert(plain.text == "hello");
+
+    auto empty = service.createLayout("", TextFormat.init, Size(500, 100));
+    assert(empty.size == Size(0, 16), "no width, but a line is still a line high");
+
+    // Without wrapping the room is not a limit: what is asked for is what is
+    // needed, and overflowing is the element's business.
+    auto over = service.createLayout("hello", TextFormat.init, Size(10, 100));
+    assert(over.size.width == 35);
+
+    auto format = TextFormat.init;
+    format.wrapping = TextWrapping.wrap;
+
+    auto wrapped = service.createLayout("hello", format, Size(21, 100));
+    assert(wrapped.size == Size(21, 32), "three to a line, so two lines");
+
+    // The room decides the breaks only when there is a limit to break at.
+    auto unbounded = service.createLayout("hello", format, Size(float.infinity, 100));
+    assert(unbounded.size == Size(35, 16));
+
+    assert(service.created == 5 && service.disposed == 0);
+    plain.dispose();
+    plain.dispose();
+    assert(service.disposed == 1, "disposing twice is not disposing twice");
 }
