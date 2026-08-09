@@ -15,3 +15,4 @@ module cherry.ui.controls;
  */
 
 public import cherry.ui.controls.stackpanel;
+public import cherry.ui.controls.textblock;
