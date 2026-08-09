@@ -58,8 +58,14 @@ class Swatch : Element
     this(string name, Color color, float thickness)
     {
         _name = name;
-        _plain = new SolidColorBrush(color);
-        _lit = new SolidColorBrush(lighten(color));
+
+        // A ramp down the band rather than a flat colour.  Nothing here says
+        // how tall the band is: a gradient's ends are fractions of whatever it
+        // fills, so the same brush would work on a band of any height -- which
+        // is the whole reason they are fractions.
+        _plain = new LinearGradientBrush(lighten(color, 0.18), color);
+        _lit = new LinearGradientBrush(lighten(color, 0.6), lighten(color, 0.3));
+
         height = thickness;
 
         // The pointer arriving and leaving is all the state a hover needs.
@@ -88,16 +94,16 @@ class Swatch : Element
     }
 
 private:
-    static Color lighten(Color c)
+    static Color lighten(Color c, float amount)
     {
-        return Color.rgb(c.r + (1 - c.r) * 0.45,
-                         c.g + (1 - c.g) * 0.45,
-                         c.b + (1 - c.b) * 0.45);
+        return Color.rgb(c.r + (1 - c.r) * amount,
+                         c.g + (1 - c.g) * amount,
+                         c.b + (1 - c.b) * amount);
     }
 
-    string          _name;
-    SolidColorBrush _plain;
-    SolidColorBrush _lit;
+    string _name;
+    LinearGradientBrush _plain;
+    LinearGradientBrush _lit;
 }
 
 // The same words in the window and in the system's own dialog, so the two can
