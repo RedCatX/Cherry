@@ -30,8 +30,14 @@ interface EventLoop
     *
     * Deliberately not shared: only the owning thread may pump the loop, and
     * the unshared reference is what expresses that.
+    *
+    * Not `scope`, although the delegate must not outlive the call: an
+    * implementation may have to hold it somewhere reachable for the duration,
+    * because the code that ends up delivering a wake is not always this call's
+    * own stack.  On Windows it is a window procedure, which a modal dialog's
+    * message pump reaches without ever going through run.
     */
-    void run(scope bool delegate() onWake);
+    void run(bool delegate() onWake);
 
    /**
     * Makes run return -- every run, if loops are nested.  A wake request
@@ -84,7 +90,7 @@ final class ManualEventLoop : EventLoop
         _condition = new Condition(_mutex);
     }
 
-    void run(scope bool delegate() onWake)
+    void run(bool delegate() onWake)
     {
         if (!onWake())
             return;
