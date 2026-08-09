@@ -9,6 +9,7 @@ import cherry.platform.render : DrawingContext, Matrix, Rect, Size, Thickness;
 import cherry.ui.event;
 import cherry.ui.layout : LayoutManager;
 import cherry.ui.styledelement;
+import cherry.ui.visual;
 
 /**
  * Where an element sits in the horizontal room its parent gave it.
@@ -57,7 +58,7 @@ enum VerticalAlignment
  *   - an element can have at most one parent (detach before re-adding);
  *   - the tree is acyclic (an ancestor cannot become a child).
  */
-class Element : StyledElement
+class Element : Visual
 {
     shared static this()
     {
@@ -459,7 +460,7 @@ class Element : StyledElement
             }
         }
 
-        immutable vacated = child._arrangedRect;
+        immutable vacated = child.arrangedRect;
 
         child._parent = null;
 
@@ -490,49 +491,12 @@ class Element : StyledElement
         {
             // Same reasoning as removeChild: the hole is this element's to
             // fill, and arrangedRect is already in its coordinate space.
-            invalidateVisual(child._arrangedRect);
+            invalidateVisual(child.arrangedRect);
 
             child._parent = null;
             child.markLayoutDirty();
             child.onDetached(this);
         }
-    }
-
-   /**
-    * Renders this element and its whole subtree in depth-first pre-order:
-    * parents draw under their children.
-    *
-    * Each element draws in a coordinate space of its own.  Its placement is
-    * pushed onto the context as a translation before onRender runs, so an
-    * element draws itself at (0, 0) whatever its parent did with it, and its
-    * children draw themselves at (0, 0) inside that.  Nobody offsets anybody
-    * by hand, which is what lets a control be moved without a line of its
-    * drawing code changing.
-    *
-    * The root is not a special case: it pushes its own placement like every
-    * other element.  A Window's placement is the client area's origin, so
-    * what it pushes is a translation by nothing -- which is why a window
-    * needs no exception rather than being one.
-    *
-    * Nothing is clipped.  An element drawing outside its own bounds is seen
-    * doing it, on purpose: overflow that shows is overflow that gets fixed.
-    *
-    * The push is undone on the way out whether onRender returns or throws, so
-    * an exception leaving an element finds the context as balanced as it left
-    * it.
-    */
-    final void renderSubtree(DrawingContext context)
-    in {
-        assert(context !is null);
-    }
-    do {
-        context.pushTransform(Matrix.translation(_arrangedRect.x, _arrangedRect.y));
-        scope (exit) context.popTransform();
-
-        onRender(context);
-
-        foreach (child; _children)
-            child.renderSubtree(context);
     }
 
    /**
@@ -874,44 +838,6 @@ class Element : StyledElement
     }
 
    /**
-    * The rectangle this element was last arranged into, in its parent's
-    * coordinate space.
-    */
-    @property Rect arrangedRect() const pure nothrow @nogc
-    {
-        return _arrangedRect;
-    }
-
-   /**
-    * The region this element draws into, in its own coordinate space.
-    *
-    * The default is its own bounds -- Rect(0, 0, actualWidth, actualHeight),
-    * the rectangle onRender's documentation already names.  Nothing clips, so
-    * that default is a claim rather than a fact: an element drawing a shadow,
-    * a focus ring or an overshooting glyph draws outside it and must widen
-    * this to say so.
-    *
-    * What the framework promises is that every pixel inside the region an
-    * element declares here, or names through invalidateVisual(Rect), is
-    * repainted after that element is invalidated -- and that the place an
-    * element occupied before it moved is repainted to the accuracy of this.
-    *
-    * What it does not promise is that nothing else is repainted; the region
-    * is a lower bound.  Nor does it promise anything at all about drawing
-    * outside the region declared here.  That is the price of having no
-    * clipping, and it is paid by the element that understated its reach.
-    *
-    * Only this element's own drawing is meant, not its children's.  A repaint
-    * redraws the whole tree and uses the region to decide which pixels reach
-    * the screen, so a child inside the region is redrawn anyway and one
-    * outside it did not change.
-    */
-    @property Rect renderBounds()
-    {
-        return Rect(0, 0, actualWidth, actualHeight);
-    }
-
-   /**
     * Whether the measured size is up to date.  False from the moment
     * invalidateMeasure is called until a pass has answered it.
     */
@@ -974,51 +900,6 @@ class Element : StyledElement
     }
 
    /**
-    * Asks for this element to be drawn again, all of it -- which means the
-    * region renderBounds declares.
-    *
-    * Like invalidateArrange this does not travel up the tree, and for a
-    * stronger reason: measure travels because a parent's answer is worked out
-    * from its children's, and drawing has no such dependency.  Finding the
-    * surface to ask is the pass's job, not a mark left on the way.
-    */
-    void invalidateVisual()
-    {
-        _visualDirty = true;
-
-        if (auto manager = layoutManager)
-            manager.enqueueVisual(this);
-    }
-
-   /**
-    * Asks for one region of this element to be drawn again, in the element's
-    * own coordinate space.
-    *
-    * The region is taken as given and is not narrowed to renderBounds: an
-    * element repainting something it draws outside itself -- a focus ring, a
-    * shadow -- is making an assertion, not a suggestion.  An empty region
-    * asks for nothing at all, and does not even mark the element.
-    */
-    void invalidateVisual(Rect region)
-    {
-        if (region.empty)
-            return;
-
-        _visualDirty = true;
-
-        if (auto manager = layoutManager)
-            manager.enqueueVisual(this, region);
-    }
-
-   /**
-    * Whether what is on the screen for this element is up to date.
-    */
-    @property bool isVisualValid() const pure nothrow @nogc
-    {
-        return !_visualDirty;
-    }
-
-   /**
     * Settles whatever layout is outstanding now, instead of waiting for the
     * pass the dispatcher has queued.
     *
@@ -1061,62 +942,52 @@ class Element : StyledElement
     }
 
    /**
-    * Asks the surface this element is the top of to repaint a region, given
-    * in this element's own coordinate space.
+    * The visual tree, answered from the element tree.
     *
-    * The default does nothing, and that is the whole of the right behaviour
-    * for a tree with no surface under it: a pass that walked to the top and
-    * found an ordinary Element has found nowhere for pixels to go, and
-    * dropping the request there is correct.  Window overrides this; a popup
-    * or an off-screen surface would too.
-    *
-    * Called from inside a layout pass.  An override may only ask -- it must
-    * not paint on the spot, and it must not lay anything out.
+    * Today the two are the same tree, so these three are one line each.  The
+    * seam is what makes that a statement rather than an assumption: when
+    * control templates arrive and a button's parts become visual children of
+    * the button and logical children of nobody, the answers change here and
+    * nothing that walks the visual tree notices.
     */
-    void repaintAsRoot(Rect region)
+    override @property Visual visualParent()
     {
+        return _parent;
     }
 
-package:
-   /*
-    * Clears the visual mark.  The pass calls this as it takes a request off
-    * the queue, before it works out where the region lands.
-    */
-    void markVisualValid() pure nothrow @nogc
+    /// ditto
+    override @property size_t visualChildCount()
     {
-        _visualDirty = false;
+        return _children.length;
     }
 
-   /*
-    * Where a region of this element's own space falls in the space of the top
-    * of its tree -- for an element inside a window, the client area.
-    *
-    * renderSubtree pushes Matrix.translation(arrangedRect.x, arrangedRect.y)
-    * for every element from the root down, so the offset is the sum of those
-    * origins over this element and each of its ancestors.  This is that walk
-    * with everything but the translation left out.  It includes this element
-    * and does not stop one short of it: the root pushes its own placement
-    * like everybody else, which is what makes a Window need no exception.
-    *
-    * Not const, and it cannot be: a const class reference cannot be rebound,
-    * so the walk would need Rebindable.  isAncestorOf documents the same
-    * thing, and root() does the same mutable walk.
-    */
-    Rect toRootSpace(Rect region) pure nothrow @nogc
+    /// ditto
+    override Visual visualChild(size_t index)
     {
-        float dx = 0;
-        float dy = 0;
-
-        for (Element e = this; e !is null; e = e._parent)
-        {
-            dx += e._arrangedRect.x;
-            dy += e._arrangedRect.y;
-        }
-
-        return Rect(region.x + dx, region.y + dy, region.width, region.height);
+        return _children[index];
     }
 
 protected:
+   /**
+    * Puts a repaint request on the layout pass's queue.
+    *
+    * The layer above knows it wants to be drawn again and deliberately does not
+    * know where such a request goes -- see the banner in visual.d for what that
+    * separation is worth.  This is where it goes: the same pass that measures
+    * and arranges, so that "laid out, then repainted" is true by construction.
+    */
+    override void enqueueRepaint(Rect region, bool hasRegion)
+    {
+        auto manager = layoutManager;
+        if (manager is null)
+            return;
+
+        if (hasRegion)
+            manager.enqueueVisual(this, region);
+        else
+            manager.enqueueVisual(this);
+    }
+
    /**
     * Measures the content and reports the size it wants.  The default offers
     * every child the whole of the available space and asks for the largest
@@ -1151,24 +1022,6 @@ protected:
 
         return finalSize;
     }
-
-   /**
-    * Draws this element's own content, in the element's own coordinate space:
-    * (0, 0) is its top left corner and it runs to actualWidth by
-    * actualHeight, so its own bounds are Rect(0, 0, actualWidth,
-    * actualHeight).  The margin is already outside that, since arrangedRect
-    * is inset by it and arrangedRect's origin is what was pushed.
-    *
-    * arrangedRect says where this element sits in its parent, and is not what
-    * to draw against: renderSubtree has applied it already, and an element
-    * that reads it here draws itself twice as far from home as it meant to.
-    *
-    * The default element draws nothing; controls override this.
-    */
-    void onRender(DrawingContext context)
-    {
-    }
-
 
    /**
     * Turns a property change into layout invalidation, as the property's
@@ -1390,14 +1243,8 @@ private:
     // going back to the placement instead would let a right-aligned element
     // walk across its slot, one pass at a time.
     Rect                 _arrangeSlot;
-    // Where it ended up, in the parent's coordinate space.
-    Rect                 _arrangedRect;
     bool                 _measureDirty = true;
     bool                 _arrangeDirty = true;
-    // Like the two above: an element that has never been drawn is out of date
-    // by definition.  Unlike them, markLayoutDirty leaves it alone -- see the
-    // comment there.
-    bool                 _visualDirty = true;
 }
 
 /*

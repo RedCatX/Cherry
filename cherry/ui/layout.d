@@ -28,6 +28,7 @@ module cherry.ui.layout;
 import cherry.core.threading;
 import cherry.platform.render : Rect;
 import cherry.ui.element;
+import cherry.ui.visual : Visual;
 
 /**
  * The layout pass of one dispatcher: what has gone out of date, and when the
@@ -218,24 +219,28 @@ package:
     }
 
    /*
-    * Records an element that has to be drawn again, either all of it -- which
-    * the pass reads off its renderBounds when it gets there, so an element
-    * may still change its mind -- or one region of it named now.
+    * Records a visual that has to be drawn again, either all of it -- which
+    * the pass reads off its renderBounds when it gets there, so a visual may
+    * still change its mind -- or one region of it named now.
+    *
+    * Typed Visual and not Element, unlike the two queues above.  Being drawn
+    * and being laid out are two different layers, and the repaint queue is the
+    * one that can hold something with no layout at all.
     */
-    void enqueueVisual(Element element)
+    void enqueueVisual(Visual visual)
     {
-        element.verifyAccess();
+        visual.verifyAccess();
 
-        _visualQueue ~= VisualRequest(element, Rect.init, false);
+        _visualQueue ~= VisualRequest(visual, Rect.init, false);
         schedulePass();
     }
 
     /// ditto
-    void enqueueVisual(Element element, Rect region)
+    void enqueueVisual(Visual visual, Rect region)
     {
-        element.verifyAccess();
+        visual.verifyAccess();
 
-        _visualQueue ~= VisualRequest(element, region, true);
+        _visualQueue ~= VisualRequest(visual, region, true);
         schedulePass();
     }
 
@@ -305,7 +310,7 @@ private:
 
             foreach (request; batch)
             {
-                auto element = request.element;
+                auto visual = request.visual;
 
                 // No skip on the mark, unlike the measure drain -- and this is
                 // the difference, not an oversight.  An element invalidated
@@ -313,15 +318,15 @@ private:
                 // have the second silently dropped, because the first entry
                 // cleared the mark.  Every entry contributes; duplicates union
                 // to the same answer, and what that costs is a rectangle.
-                immutable own = request.hasRegion ? request.region : element.renderBounds;
+                immutable own = request.hasRegion ? request.region : visual.renderBounds;
 
-                element.markVisualValid();
+                visual.markVisualValid();
 
                 if (own.empty)
                     continue;
 
-                immutable region = element.toRootSpace(own);
-                auto root = element.root;
+                immutable region = visual.toRootSpace(own);
+                auto root = visual.visualRoot;
 
                 // A linear scan and not an associative array: the distinct
                 // roots on one dispatcher are its windows, of which there are
@@ -342,10 +347,10 @@ private:
                     roots ~= RootRegion(root, region);
             }
 
-            // An element whose tree has no surface over it walks up to an
-            // ordinary Element, whose repaintAsRoot does nothing.  The
-            // request evaporates, which is the same answer markLayoutDirty
-            // gives a detached element for layout.
+            // A visual whose tree has no surface over it walks up to an
+            // ordinary Visual, whose repaintAsRoot does nothing.  The request
+            // evaporates, which is the same answer markLayoutDirty gives a
+            // detached element for layout.
             foreach (entry; roots)
                 entry.root.repaintAsRoot(entry.region);
         }
@@ -397,7 +402,7 @@ private:
     */
     static struct VisualRequest
     {
-        Element element;
+        Visual  visual;
         Rect    region;
         bool    hasRegion;
     }
@@ -405,7 +410,7 @@ private:
     /// One surface and everything asked of it this turn.
     static struct RootRegion
     {
-        Element root;
+        Visual  root;
         Rect    region;
     }
 

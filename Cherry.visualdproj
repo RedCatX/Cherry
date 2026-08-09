@@ -810,6 +810,7 @@
     <File path="cherry\ui\layout.d" />
     <File path="cherry\ui\package.d" />
     <File path="cherry\ui\styledelement.d" />
+    <File path="cherry\ui\visual.d" />
     <File path="cherry\ui\window.d" />
    </Folder>
   </Folder>
