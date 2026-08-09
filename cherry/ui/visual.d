@@ -22,7 +22,7 @@ module cherry.ui.visual;
  * constructor here becomes a perfectly ordinary thing to add.
  */
 
-import cherry.platform.render : DrawingContext, Matrix, Rect;
+import cherry.platform.render : DrawingContext, Matrix, Point, Rect;
 import cherry.ui.styledelement;
 
 /**
@@ -233,18 +233,41 @@ class Visual : StyledElement
     {
     }
 
-package:
-   /*
-    * Clears the visual mark.  The pass calls this as it takes a request off the
-    * queue, before it works out where the region lands.
+   /**
+    * The topmost visual of this subtree lying under the point, or null when
+    * nothing here does.
+    *
+    * **The point is in this visual's PARENT's coordinate space**, not its own.
+    * That is the same convention renderSubtree follows -- it begins by pushing
+    * this visual's own placement -- and the same one toRootSpace follows, which
+    * includes this visual's own origin rather than stopping one short of it.
+    * The consequence worth stating because it is the natural wrong guess: what
+    * a window is handed is a plain client-area point, with no adjustment.
+    *
+    * Children are searched last to first, because that is the order they were
+    * drawn in and the last one drawn is the one on top.  A visual answers for
+    * itself only when none of its children did.
+    *
+    * **The search descends into children even when this visual does not contain
+    * the point.** Nothing clips, so renderSubtree draws a child wherever its
+    * placement puts it -- outside its parent included -- and a child that can be
+    * seen has to be one that can be hit.  It is the obvious thing to optimise
+    * and the optimisation would be wrong; when ClipToBounds arrives, that is
+    * what makes pruning correct rather than a guess.
     */
-    void markVisualValid() pure nothrow @nogc
+    Visual hitTest(Point point)
     {
-        _visualDirty = false;
+        immutable local = Point(point.x - _arrangedRect.x, point.y - _arrangedRect.y);
+
+        foreach_reverse (i; 0 .. visualChildCount)
+            if (auto hit = visualChild(i).hitTest(local))
+                return hit;
+
+        return containsPoint(local) ? this : null;
     }
 
-   /*
-    * Where a region of this visual's own space falls in the space of the top of
+   /**
+    * Where a point of this visual's own space falls in the space of the top of
     * its tree -- for a visual inside a window, the client area.
     *
     * renderSubtree pushes Matrix.translation(arrangedRect.x, arrangedRect.y)
@@ -259,18 +282,40 @@ package:
     * bind every override the seam will ever have -- for a walk that runs once
     * per queued request rather than in any loop worth counting.
     */
+    Point toRootSpace(Point point)
+    {
+        immutable offset = originInRoot();
+        return Point(point.x + offset.x, point.y + offset.y);
+    }
+
+    /// ditto
     Rect toRootSpace(Rect region)
     {
-        float dx = 0;
-        float dy = 0;
+        immutable offset = originInRoot();
+        return Rect(region.x + offset.x, region.y + offset.y, region.width, region.height);
+    }
 
-        for (Visual v = this; v !is null; v = v.visualParent)
-        {
-            dx += v._arrangedRect.x;
-            dy += v._arrangedRect.y;
-        }
+   /**
+    * The other direction: where a point of the root's space falls in this
+    * visual's own.
+    *
+    * What an event carrying a window-relative position is asked for when a
+    * handler somewhere down the tree wants it in local terms.
+    */
+    Point fromRootSpace(Point point)
+    {
+        immutable offset = originInRoot();
+        return Point(point.x - offset.x, point.y - offset.y);
+    }
 
-        return Rect(region.x + dx, region.y + dy, region.width, region.height);
+package:
+   /*
+    * Clears the visual mark.  The pass calls this as it takes a request off the
+    * queue, before it works out where the region lands.
+    */
+    void markVisualValid() pure nothrow @nogc
+    {
+        _visualDirty = false;
     }
 
 protected:
@@ -286,6 +331,28 @@ protected:
     */
     void onRender(DrawingContext context)
     {
+    }
+
+   /**
+    * Whether the point, in this visual's own coordinate space, is on it.
+    *
+    * The default is its own box: the origin to arrangedRect's width and height,
+    * with the near edges inside and the far ones belonging to the neighbour.
+    *
+    * **Not renderBounds.** That one is a claim about ink -- a TextBlock widens
+    * it to cover the accents and descenders that overshoot the box -- and ink
+    * is not a surface to interact with.  Nobody should be able to click the
+    * overshoot of a letter.  A Shape will override this with its geometry, so
+    * that the inside of a circle is round rather than square.
+    *
+    * A visual that draws nothing still answers yes, which is what makes a panel
+    * swallow the clicks that reach it.  That is WPF's base rule too, where the
+    * exception is a Panel with no Background saying no on purpose -- and that
+    * exception arrives here when brushes do.
+    */
+    bool containsPoint(Point point)
+    {
+        return Rect(0, 0, _arrangedRect.width, _arrangedRect.height).contains(point);
     }
 
    /**
@@ -312,6 +379,24 @@ protected:
     Rect _arrangedRect;
 
 private:
+   /*
+    * Where this visual's own origin sits in the root's space: the sum of every
+    * placement from the root down to and including this one.
+    */
+    Point originInRoot()
+    {
+        float dx = 0;
+        float dy = 0;
+
+        for (Visual v = this; v !is null; v = v.visualParent)
+        {
+            dx += v._arrangedRect.x;
+            dy += v._arrangedRect.y;
+        }
+
+        return Point(dx, dy);
+    }
+
     // An element that has never been drawn is out of date by definition, so the
     // mark starts raised and only a drain lowers it.
     bool _visualDirty = true;
@@ -464,4 +549,93 @@ unittest
     node.invalidateVisual(Rect(5, 5, 0, 10));
     assert(node.isVisualValid);
     assert(node.requests.length == 2, "nothing was passed on either");
+}
+
+unittest
+{
+    // The point arrives in the parent's space, so a lone visual is hit at the
+    // coordinates its own placement names -- not at its own origin.
+    auto node = new Node("only", Rect(10, 20, 100, 50));
+
+    assert(node.hitTest(Point(10, 20)) is node, "its near corner");
+    assert(node.hitTest(Point(60, 40)) is node);
+    assert(node.hitTest(Point(109, 69)) is node);
+
+    assert(node.hitTest(Point(9, 40)) is null, "just outside");
+    assert(node.hitTest(Point(110, 40)) is null, "and the far edge belongs to nobody here");
+    assert(node.hitTest(Point(-1, -1)) is null);
+}
+
+unittest
+{
+    // A child is found before the parent it sits in, and the coordinates
+    // compose down the chain.
+    auto outer = new Node("outer", Rect(10, 10, 200, 100));
+    auto inner = new Node("inner", Rect(20, 20, 50, 30));
+    outer.add(inner);
+
+    assert(outer.hitTest(Point(35, 35)) is inner, "inside both, so the deeper one");
+    assert(outer.hitTest(Point(15, 15)) is outer, "inside the parent only");
+    assert(outer.hitTest(Point(5, 5)) is null);
+
+    // The inner one lives at (30, 30) in the root's space, which is the same
+    // arithmetic read the other way round.
+    assert(inner.toRootSpace(Point(0, 0)) == Point(30, 30));
+    assert(inner.fromRootSpace(Point(35, 35)) == Point(5, 5));
+}
+
+unittest
+{
+    // Two overlapping siblings: the one added later is drawn last, so it is on
+    // top, so it is what the mouse finds.
+    auto root = new Node("root", Rect(0, 0, 200, 200));
+    auto under = new Node("under", Rect(0, 0, 100, 100));
+    auto over = new Node("over", Rect(50, 50, 100, 100));
+    root.add(under);
+    root.add(over);
+
+    assert(root.hitTest(Point(75, 75)) is over, "where they overlap, the later one");
+    assert(root.hitTest(Point(25, 25)) is under);
+    assert(root.hitTest(Point(125, 125)) is over);
+}
+
+unittest
+{
+    // A child placed outside its parent is drawn there, so it is hit there.
+    //
+    // This is the test that fails the moment somebody prunes the walk on the
+    // parent missing -- which is the obvious optimisation and is wrong until
+    // there is clipping to make it right.
+    auto parent = new Node("parent", Rect(0, 0, 50, 50));
+    auto escapee = new Node("escapee", Rect(100, 100, 40, 40));
+    parent.add(escapee);
+
+    assert(parent.hitTest(Point(120, 120)) is escapee,
+           "well outside the parent, and still exactly where it is drawn");
+    assert(parent.hitTest(Point(25, 25)) is parent);
+    assert(parent.hitTest(Point(80, 80)) is null, "in neither of them");
+}
+
+unittest
+{
+    // Two visuals laid end to end: the line they share belongs to one of them,
+    // and which one does not depend on the order they are tested in.
+    auto root = new Node("root", Rect(0, 0, 200, 100));
+    auto left = new Node("left", Rect(0, 0, 50, 100));
+    auto right = new Node("right", Rect(50, 0, 50, 100));
+    root.add(left);
+    root.add(right);
+
+    assert(root.hitTest(Point(49, 50)) is left);
+    assert(root.hitTest(Point(50, 50)) is right, "the shared edge is the far one's");
+}
+
+unittest
+{
+    // A visual with no size is not in the way of anything.
+    auto root = new Node("root", Rect(0, 0, 100, 100));
+    auto flat = new Node("flat", Rect(10, 10, 0, 40));
+    root.add(flat);
+
+    assert(root.hitTest(Point(10, 20)) is root);
 }
