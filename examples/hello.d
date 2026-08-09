@@ -107,8 +107,48 @@ private:
 }
 
 // The same words in the window and in the system's own dialog, so the two can
-// be held up against each other.  See the click handler at the bottom.
+// be held up against each other.  See the button's click handler.
 private enum sample = "The quick brown fox jumps over the lazy dog.";
+
+/**
+ * A button that changes colour as it is used.
+ *
+ * The three states are set from the input events rather than read inside
+ * onRender, because a property assigned while drawing would ask for another
+ * frame to draw it.  Button subscribes its own handlers in its constructor and
+ * a routed event visits handlers in the order they were added, so by the time
+ * these run, IsPressed already says what happened.
+ */
+class HelloButton : Button
+{
+    this(string caption)
+    {
+        text = caption;
+        cornerRadius = 5;
+        borderThickness = Thickness(1);
+        borderBrush = new SolidColorBrush(Color.rgb(0.62, 0.16, 0.22));
+
+        _normal = new LinearGradientBrush(Color.rgb(0.98, 0.93, 0.94), Color.rgb(0.93, 0.84, 0.86));
+        _hot = new LinearGradientBrush(Color.white, Color.rgb(0.97, 0.90, 0.92));
+        _pressed = new LinearGradientBrush(Color.rgb(0.88, 0.76, 0.79), Color.rgb(0.94, 0.86, 0.88));
+
+        background = _normal;
+
+        this.onMouseEnter ~= (Element s, RoutedEventArgs a) { refresh(); };
+        this.onMouseLeave ~= (Element s, RoutedEventArgs a) { refresh(); };
+        this.onMouseDown ~= (Element s, RoutedEventArgs a) { refresh(); };
+        this.onMouseUp ~= (Element s, RoutedEventArgs a) { refresh(); };
+        this.onMouseCaptureLost ~= (Element s, RoutedEventArgs a) { refresh(); };
+    }
+
+private:
+    void refresh()
+    {
+        background = isPressed ? _pressed : (isMouseOver ? _hot : _normal);
+    }
+
+    LinearGradientBrush _normal, _hot, _pressed;
+}
 
 void main()
 {
@@ -152,6 +192,23 @@ void main()
 
     stripes.addChild(new Swatch("brown", Color.rgb(0.45, 0.30, 0.12), 12));
 
+    // Nothing says how big it is: the label asks the text service how wide the
+    // word is, Control adds its padding, and the stack panel takes that as the
+    // height it needs.  Across the column it stretches, because that is what
+    // an alignment nobody set means.
+    auto button = new HelloButton("Compare");
+    button.margin = Thickness(0, 10, 0, 0);
+    stripes.addChild(button);
+
+    button.onClick ~= (Element sender, RoutedEventArgs args) {
+        // The same sentence, drawn by the system instead of by us.  A
+        // MessageBox is a classic GDI dialog, which is the picture
+        // TextRendering.display is meant to be indistinguishable from: hold the
+        // box next to the line along the bottom of the window and look at the
+        // letter shapes and the spacing.
+        showMessage("Cherry", sample, MessageKind.information);
+    };
+
     window.addChild(stripes);
 
     // A second child of the window, pinned along the bottom.  The window is a
@@ -165,19 +222,12 @@ void main()
 
     window.addChild(footer);
 
-    // Everything a band did not claim arrives here on the way up, with args
-    // naming whatever was actually under the pointer.
+    // Everything a band or the button did not claim arrives here on the way up,
+    // with args naming whatever was actually under the pointer.
     window.onMouseDown ~= (Element sender, RoutedEventArgs args) {
         auto mouse = cast(MouseEventArgs) args;
         writefln("mouse %s down at (%.0f, %.0f) over %s",
                  mouse.button, mouse.x, mouse.y, typeid(args.source).name);
-
-        // The same sentence, drawn by the system instead of by us.  A
-        // MessageBox is a classic GDI dialog, which is the picture
-        // TextRendering.display is meant to be indistinguishable from: hold
-        // the box next to the line along the bottom of the window and look at
-        // the letter shapes and the spacing.
-        showMessage("Cherry", sample, MessageKind.information);
     };
 
     // shutdown() is shared -- callable from any thread; run() is not.
