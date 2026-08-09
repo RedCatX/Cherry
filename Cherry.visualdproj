@@ -799,6 +799,7 @@
    </Folder>
    <Folder name="ui">
     <Folder name="controls">
+     <File path="cherry\ui\controls\control.d" />
      <File path="cherry\ui\controls\package.d" />
      <File path="cherry\ui\controls\stackpanel.d" />
      <File path="cherry\ui\controls\textblock.d" />
