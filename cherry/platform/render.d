@@ -139,6 +139,24 @@ struct Rect
     }
 
    /**
+    * Whether the point falls inside, with the left and top edges belonging to
+    * the rectangle and the right and bottom edges belonging to whatever is
+    * next along.
+    *
+    * Half-open on purpose.  Two elements laid end to end share a coordinate,
+    * and a closed test would put every point of that line in both of them --
+    * so which one a click landed on would depend on the order they happened to
+    * be tested in.  The same rule makes an empty rectangle contain nothing,
+    * which agrees with `empty`, and leaves a NaN coordinate outside everything,
+    * because both comparisons are false.
+    */
+    bool contains(Point point) pure const nothrow @nogc
+    {
+        return point.x >= x && point.x < right
+            && point.y >= y && point.y < bottom;
+    }
+
+   /**
     * The smallest rectangle covering both, with an empty operand ignored --
     * in either position, so that folding a list into `Rect.init` gives the
     * union of the list.
@@ -172,6 +190,28 @@ unittest
     assert(Rect(10, 20, -5, 50).empty);
     assert(Rect(10, 20, float.nan, 50).empty);
     assert(!Rect(0, 0, 1, 1).empty);
+}
+
+unittest
+{
+    // Which points belong to a rectangle, and which belong to its neighbour.
+    immutable r = Rect(10, 20, 100, 50);
+
+    assert(r.contains(Point(10, 20)), "the near corner is inside");
+    assert(r.contains(Point(109.99f, 69.99f)));
+    assert(r.contains(Point(50, 40)));
+
+    assert(!r.contains(Point(110, 40)), "and the far edge is not");
+    assert(!r.contains(Point(50, 70)));
+    assert(!r.contains(Point(9.99f, 40)));
+
+    // Laid end to end, the shared line belongs to exactly one of them.
+    immutable left  = Rect(0, 0, 50, 20);
+    immutable right = Rect(50, 0, 50, 20);
+    assert(!left.contains(Point(50, 10)) && right.contains(Point(50, 10)));
+
+    assert(!Rect.init.contains(Point(0, 0)), "nothing is inside nothing");
+    assert(!r.contains(Point(float.nan, 40)));
 }
 
 unittest
