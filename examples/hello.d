@@ -113,11 +113,15 @@ private enum sample = "The quick brown fox jumps over the lazy dog.";
 /**
  * A button that changes colour as it is used.
  *
- * The three states are set from the input events rather than read inside
- * onRender, because a property assigned while drawing would ask for another
- * frame to draw it.  Button subscribes its own handlers in its constructor and
- * a routed event visits handlers in the order they were added, so by the time
- * these run, IsPressed already says what happened.
+ * **It watches the state, not the events**, and the difference is worth
+ * knowing.  Button handles MouseDown and MouseUp itself and marks them
+ * handled -- a press on a button is not also a press on what it sits in -- and
+ * a handled event skips every handler after it on the same element, this one
+ * included.  So subscribing to the mouse here would work for entering and
+ * leaving and quietly do nothing for pressing.  WPF's ButtonBase behaves the
+ * same way, and the same answer applies: read IsPressed and IsMouseOver.
+ *
+ * This override is what a style trigger will be, once there are styles.
  */
 class HelloButton : Button
 {
@@ -133,20 +137,27 @@ class HelloButton : Button
         _pressed = new LinearGradientBrush(Color.rgb(0.88, 0.76, 0.79), Color.rgb(0.94, 0.86, 0.88));
 
         background = _normal;
+    }
 
-        this.onMouseEnter ~= (Element s, RoutedEventArgs a) { refresh(); };
-        this.onMouseLeave ~= (Element s, RoutedEventArgs a) { refresh(); };
-        this.onMouseDown ~= (Element s, RoutedEventArgs a) { refresh(); };
-        this.onMouseUp ~= (Element s, RoutedEventArgs a) { refresh(); };
-        this.onMouseCaptureLost ~= (Element s, RoutedEventArgs a) { refresh(); };
+protected:
+    override void onPropertyChanged(immutable(Property) property,
+                                    ref immutable(PropertyMetadata) metadata,
+                                    const(Value) oldValue,
+                                    const(Value) newValue)
+    {
+        super.onPropertyChanged(property, metadata, oldValue, newValue);
+
+        // The brushes are built after the base constructor has run, and the
+        // base constructor sets properties -- so this can be reached before
+        // there is anything to paint with.
+        if (_normal is null)
+            return;
+
+        if (property is Button.isPressedProperty || property is Element.isMouseOverProperty)
+            background = isPressed ? _pressed : (isMouseOver ? _hot : _normal);
     }
 
 private:
-    void refresh()
-    {
-        background = isPressed ? _pressed : (isMouseOver ? _hot : _normal);
-    }
-
     LinearGradientBrush _normal, _hot, _pressed;
 }
 
