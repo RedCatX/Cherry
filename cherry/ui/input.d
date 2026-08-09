@@ -99,6 +99,17 @@ immutable RoutedEvent mouseEnterEvent;
 /// ditto
 immutable RoutedEvent mouseLeaveEvent;
 
+/**
+ * The element that was holding the pointer is no longer holding it.
+ *
+ * Direct, because it concerns exactly one element -- the one that asked.  It
+ * arrives however the capture ended: given up, taken by another element, or
+ * taken by the system, which happens for reasons no application can see.  An
+ * element that undoes its pressed state on the button release alone will be
+ * left pressed after the first task switch.
+ */
+immutable RoutedEvent mouseCaptureLostEvent;
+
 shared static this()
 {
     mouseDownEvent  = RoutedEvent.register("MouseDown", RoutingStrategy.bubble, getRtti!Element());
@@ -106,6 +117,8 @@ shared static this()
     mouseMoveEvent  = RoutedEvent.register("MouseMove", RoutingStrategy.bubble, getRtti!Element());
     mouseEnterEvent = RoutedEvent.register("MouseEnter", RoutingStrategy.direct, getRtti!Element());
     mouseLeaveEvent = RoutedEvent.register("MouseLeave", RoutingStrategy.direct, getRtti!Element());
+    mouseCaptureLostEvent = RoutedEvent.register("MouseCaptureLost",
+        RoutingStrategy.direct, getRtti!Element());
 }
 
 /**
@@ -139,6 +152,12 @@ shared static this()
 @property auto onMouseLeave(Element element)
 {
     return routedAccessor(element, mouseLeaveEvent);
+}
+
+/// ditto
+@property auto onMouseCaptureLost(Element element)
+{
+    return routedAccessor(element, mouseCaptureLostEvent);
 }
 
 package:

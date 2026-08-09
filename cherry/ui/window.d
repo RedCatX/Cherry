@@ -315,6 +315,64 @@ private:
     */
     void handleMouseCaptureLost()
     {
+        endCapture();
+    }
+
+   /**
+    * Takes the pointer for an element in this window's tree.
+    *
+    * One element holds it at a time, which is what makes "the captor" a field
+    * rather than a set: the pointer is one thing and two elements cannot both
+    * be dragging with it.  An element asking while somebody else holds it takes
+    * it over, and the one it was taken from is told.
+    */
+    public override void captureAsRoot(Element target)
+    {
+        if (_destroyed || target is null || _mouseCaptor is target)
+            return;
+
+        endCapture();
+
+        _mouseCaptor = target;
+        target.setMouseCaptured(true);
+        _platform.captureMouse();
+    }
+
+   /**
+    * Gives it up, but only for the element that has it.
+    *
+    * An element releasing a capture it never took would otherwise pull the
+    * pointer out from under whoever really has it -- which is the sort of thing
+    * that happens when a control releases on a path it also releases on
+    * elsewhere.
+    */
+    public override void releaseCaptureAsRoot(Element target)
+    {
+        if (_mouseCaptor !is target || target is null)
+            return;
+
+        endCapture();
+
+        if (!_destroyed)
+            _platform.releaseMouseCapture();
+    }
+
+   /*
+    * Forgets the captor and tells it, in that order -- so a handler that asks
+    * for the capture back from inside its own lost notification is granting
+    * itself something nobody currently holds, rather than fighting a field that
+    * still names it.
+    */
+    void endCapture()
+    {
+        if (_mouseCaptor is null)
+            return;
+
+        auto was = _mouseCaptor;
+        _mouseCaptor = null;
+
+        was.setMouseCaptured(false);
+        was.raiseEvent(new RoutedEventArgs(mouseCaptureLostEvent));
     }
 
    /*
@@ -336,15 +394,19 @@ private:
     */
     void handleMouseMove(int x, int y)
     {
-        auto target = hitElement(x, y);
+        auto under = hitElement(x, y);
 
         _lastMouseX = x;
         _lastMouseY = y;
 
-        updateMouseOver(_mouseOver, target, x, y);
-        _mouseOver = target;
+        // Hovering follows the pointer even while somebody holds it, which is
+        // what lets a pressed button go dim when the pointer slides off it and
+        // light up again when it comes back.  Only the move event itself goes
+        // to the captor.
+        updateMouseOver(_mouseOver, under, x, y);
+        _mouseOver = under;
 
-        target.raiseEvent(new MouseEventArgs(mouseMoveEvent, MouseButton.none, x, y));
+        mouseTarget(x, y).raiseEvent(new MouseEventArgs(mouseMoveEvent, MouseButton.none, x, y));
     }
 
    /*
@@ -358,7 +420,20 @@ private:
     */
     void raiseMouseEvent(immutable(RoutedEvent) event, MouseButton button, int x, int y)
     {
-        hitElement(x, y).raiseEvent(new MouseEventArgs(event, button, x, y));
+        mouseTarget(x, y).raiseEvent(new MouseEventArgs(event, button, x, y));
+    }
+
+   /*
+    * Who a mouse event is for: whoever holds the pointer, or whatever is under
+    * it.
+    *
+    * The capture wins even when the pointer is somewhere else entirely -- that
+    * is the whole of what capturing means, and it is why a button dragged off
+    * itself still hears the release.
+    */
+    Element mouseTarget(float x, float y)
+    {
+        return _mouseCaptor !is null ? _mouseCaptor : hitElement(x, y);
     }
 
    /*
@@ -387,6 +462,7 @@ private:
     void handleDestroyed()
     {
         _destroyed = true;
+        endCapture();
         handleDisposedRenderer();
 
         // Unregister this Window object from UIApplication
@@ -556,6 +632,9 @@ private:
     // next notification can work out what changed.  Null before the pointer
     // has ever been in the window, and again once it has left.
     Element        _mouseOver;
+    // Whoever asked for every mouse event to come to it.  One at a time: the
+    // pointer is one thing.
+    Element        _mouseCaptor;
     // Where it was when it was last seen, so that leaving -- which carries no
     // position, the pointer being elsewhere by then -- has one to report.
     float          _lastMouseX = 0;
@@ -868,6 +947,110 @@ unittest
     // Coming back starts the chain over.
     w.platform.host.onMouseMove(50, 50);
     assert(log == ["enter:host", "enter:inner"]);
+}
+
+unittest
+{
+    // Capturing sends every mouse event to one element wherever the pointer
+    // goes -- and lets go of that when the capture ends.
+    string[] log;
+
+    auto w = makeWindow();
+    auto zone = new Zone("zone", &log, Rect(0, 0, 100, 100));
+    w.window.addChild(zone);
+    w.window.updateLayout();
+
+    Element[] heard;
+    zone.onMouseUp ~= (Element sender, RoutedEventArgs args) { heard ~= sender; };
+    w.window.onMouseUp ~= (Element sender, RoutedEventArgs args) { heard ~= sender; };
+
+    // Far outside the zone, so without a capture the window would be the one
+    // to hear it.
+    w.platform.host.onMouseUp(MouseButton.left, 400, 300);
+    assert(heard == [cast(Element) w.window], "nothing captured, so whatever is under it");
+
+    heard = null;
+    zone.captureMouse();
+
+    assert(zone.isMouseCaptured);
+    assert(w.platform.captures == 1, "and the platform was told");
+
+    w.platform.host.onMouseUp(MouseButton.left, 400, 300);
+    assert(heard == [cast(Element) zone, w.window],
+           "the captor hears it although the pointer is nowhere near, and it still bubbles");
+
+    zone.releaseMouseCapture();
+    assert(!zone.isMouseCaptured);
+    assert(w.platform.releases == 1);
+
+    heard = null;
+    w.platform.host.onMouseUp(MouseButton.left, 400, 300);
+    assert(heard == [cast(Element) w.window], "back to whatever is under it");
+}
+
+unittest
+{
+    // Hovering keeps following the pointer while somebody holds it -- which is
+    // what lets a pressed button dim when the pointer slides off and light up
+    // again when it comes back.
+    string[] log;
+
+    auto w = makeWindow();
+    auto zone = new Zone("zone", &log, Rect(0, 0, 100, 100));
+    w.window.addChild(zone);
+    w.window.updateLayout();
+
+    w.platform.host.onMouseMove(50, 50);
+    assert(zone.isMouseOver);
+
+    zone.captureMouse();
+    log = null;
+
+    w.platform.host.onMouseMove(400, 300);
+    assert(!zone.isMouseOver, "the pointer really is elsewhere, capture or not");
+    assert(log == ["leave:zone"]);
+
+    w.platform.host.onMouseMove(60, 60);
+    assert(zone.isMouseOver);
+    assert(log == ["leave:zone", "enter:zone"]);
+}
+
+unittest
+{
+    // A capture can end without being released, and the element is told --
+    // which is the only way it can undo what it started.
+    string[] log;
+
+    auto w = makeWindow();
+    auto zone = new Zone("zone", &log, Rect(0, 0, 100, 100));
+    w.window.addChild(zone);
+    w.window.updateLayout();
+
+    int lost;
+    zone.onMouseCaptureLost ~= (Element sender, RoutedEventArgs args) { ++lost; };
+
+    zone.captureMouse();
+    w.platform.host.onMouseCaptureLost();
+
+    assert(lost == 1);
+    assert(!zone.isMouseCaptured);
+    assert(w.platform.releases == 0, "the platform already did it -- asking again would be wrong");
+
+    // Releasing one nobody holds does nothing, and neither does releasing one
+    // somebody else holds.
+    zone.releaseMouseCapture();
+    assert(lost == 1 && w.platform.releases == 0);
+
+    auto other = new Zone("other", &log, Rect(0, 0, 10, 10));
+    w.window.addChild(other);
+
+    zone.captureMouse();
+    other.releaseMouseCapture();
+    assert(zone.isMouseCaptured, "not yours to give away");
+
+    // But taking it over is allowed, and the one it was taken from is told.
+    other.captureMouse();
+    assert(lost == 2 && !zone.isMouseCaptured && other.isMouseCaptured);
 }
 
 unittest

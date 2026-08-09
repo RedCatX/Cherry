@@ -1004,7 +1004,73 @@ class Element : Visual
         return _children[index];
     }
 
+   /**
+    * Asks for every mouse event to come here until the capture is given up,
+    * wherever the pointer actually is.
+    *
+    * What a button needs to survive being pressed, dragged off itself and
+    * released somewhere else: without it the release lands on whatever is
+    * under the pointer and the button is never told it is no longer pressed.
+    *
+    * The request travels to the top of the tree, because holding the pointer is
+    * something a surface does and an element in no surface cannot do it -- the
+    * same shape as repaintAsRoot, and for the same reason: element.d may not
+    * name Window.
+    *
+    * A capture can end without being released here.  The system takes it away
+    * when a menu opens, when another window is shown, on a task switch; that is
+    * what mouseCaptureLost is for, and an element that undoes its state only in
+    * releaseMouseCapture will one day be left holding it.
+    */
+    void captureMouse()
+    {
+        root.captureAsRoot(this);
+    }
+
+    /// ditto
+    void releaseMouseCapture()
+    {
+        root.releaseCaptureAsRoot(this);
+    }
+
+   /**
+    * Whether every mouse event is coming here at the moment.
+    *
+    * A plain flag rather than a property: nothing styles on it, and the
+    * elements that read it are the ones that asked for it.  It becomes a
+    * read-only property the day a template wants to.
+    */
+    @property bool isMouseCaptured() const pure nothrow @nogc
+    {
+        return _mouseCaptured;
+    }
+
+   /**
+    * Takes or gives up the pointer on behalf of an element below.
+    *
+    * The default does nothing, which is the right answer for a tree with no
+    * surface under it -- there is nothing to hold the pointer with.  Window
+    * overrides both.
+    */
+    void captureAsRoot(Element target)
+    {
+    }
+
+    /// ditto
+    void releaseCaptureAsRoot(Element target)
+    {
+    }
+
 package:
+   /*
+    * Records that this element is or is not holding the pointer.  Written by
+    * the surface that grants it and by nothing else.
+    */
+    void setMouseCaptured(bool value) pure nothrow @nogc
+    {
+        _mouseCaptured = value;
+    }
+
    /*
     * Records that the pointer is or is not over this element.
     *
@@ -1296,6 +1362,7 @@ private:
     Rect                 _arrangeSlot;
     bool                 _measureDirty = true;
     bool                 _arrangeDirty = true;
+    bool                 _mouseCaptured;
 }
 
 /*
