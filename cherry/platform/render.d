@@ -546,6 +546,117 @@ unittest
 }
 
 /**
+ * One colour along a gradient, and how far along it sits.
+ *
+ * `offset` runs from 0 at the start of the gradient to 1 at its end, whatever
+ * the gradient's real length -- so a set of stops describes a ramp rather than
+ * a size, and the same ones fill a button and a window equally.
+ *
+ * A struct and not an object, which costs the ability to animate one stop of a
+ * gradient while leaving the rest alone.  WPF pays for that with a whole
+ * Freezable per stop; here the brush is the animatable thing and the ramp goes
+ * with it.  The day one stop needs to move on its own, this becomes a class and
+ * the arrays below become collections.
+ */
+struct GradientStop
+{
+    float offset = 0;
+    Color color;
+}
+
+/**
+ * What a gradient does outside the span between its ends.
+ *
+ * The names are WPF's GradientSpreadMethod.  Direct2D calls the same three
+ * CLAMP, WRAP and MIRROR.
+ */
+enum GradientSpread
+{
+    /// The end colours carry on forever.
+    pad,
+    /// The ramp turns round and runs back.
+    reflect,
+    /// The ramp starts over.
+    repeat
+}
+
+/**
+ * Something a drawing context can fill with.
+ *
+ * The drawing model needs to know what a fill looks like and nothing else --
+ * not that it has properties, not that it can be animated or bound, not that it
+ * sits in a tree.  Those belong to the object on the other side of this seam,
+ * which the UI layer calls a Brush; this is the little of it that has to reach
+ * down here.
+ *
+ * The split is not taste.  A context lives in cherry.platform and a Brush is a
+ * StyledElement in cherry.ui, and the dependencies run ui -> core -> platform:
+ * a class from up there cannot appear in a signature down here, but an
+ * interface declared here can be implemented up there.
+ *
+ * A backend asks which kind it has by casting to one of the interfaces below,
+ * and must cope with a Paint that is none of them by not drawing -- a kind it
+ * has never heard of is a kind it cannot render.
+ */
+interface Paint
+{
+   /**
+    * A number that changes whenever this paint would look different.
+    *
+    * The whole of what a backend needs to know to tell a device resource it has
+    * built and cached from one that has gone stale.  Anything cheaper -- asking
+    * every field, rebuilding every frame -- is either wrong or slow, and
+    * anything richer would mean the paint knowing who is caching it.
+    */
+    @property ulong revision();
+}
+
+/// A paint that is one colour everywhere.
+interface SolidPaint : Paint
+{
+    @property Color color();
+}
+
+/**
+ * A paint that ramps between colours along a line.
+ *
+ * **The ends are fractions of what is being filled**, not lengths: (0, 0) is
+ * its top left corner and (1, 1) its bottom right, so `start` at (0, 0) and
+ * `end` at (0, 1) is top to bottom whatever the shape turns out to be.  That is
+ * WPF's RelativeToBoundingBox, and it is the only mode here because the other
+ * one is useless to a control whose size the layout decides: a button cannot
+ * name its own height in a brush written before it was measured.
+ *
+ * What it costs the backend is that the shape being filled has to reach the
+ * paint -- a fill knows its own bounds, so the conversion happens there.
+ */
+interface GradientPaint : Paint
+{
+    @property Point start();
+    /// ditto
+    @property Point end();
+
+    /// The ramp, in the order it was given.
+    @property const(GradientStop)[] stops();
+
+    /// What happens outside the span between the ends.
+    @property GradientSpread spread();
+}
+
+unittest
+{
+    // A stop nobody has touched is the start of the ramp in the default
+    // colour, which is what makes GradientStop[] usable as a property value.
+    immutable stop = GradientStop.init;
+
+    assert(stop.offset == 0);
+    assert(stop.color == Color.black, "Color's own default, opaque");
+
+    assert(GradientSpread.init == GradientSpread.pad,
+           "the ends carry on, which is the answer nobody has to think about");
+}
+
+/**
  * How heavy the strokes of a face are, on the scale every font format uses.
  *
  * The numbers are the weights themselves rather than an ordinal, because they
