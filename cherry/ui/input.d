@@ -141,6 +141,94 @@ shared static this()
     return routedAccessor(element, mouseLeaveEvent);
 }
 
+package:
+
+/**
+ * Moves the pointer from one element to another, telling everything the change
+ * really affects and nothing else.
+ *
+ * Both arguments are the deepest element under the pointer, before and after;
+ * either may be null, which is how the pointer entering the window for the
+ * first time and leaving it altogether are expressed.
+ *
+ * The chains from each up to the root share a tail -- the elements the pointer
+ * was inside before and still is.  Those hear nothing: it never left them, and
+ * telling them otherwise is exactly the bug that makes hover flicker when the
+ * pointer crosses a boundary between two children of the same parent.  Only the
+ * parts below the deepest shared element change.
+ *
+ * Order matters in both directions.  Leaving runs from the deepest outwards, so
+ * an element is told after everything inside it already has been; entering runs
+ * from the outermost inwards, so a container knows the pointer is in it before
+ * the child it landed on says the same.  A handler on either can then trust that
+ * the elements around it are already in the state it is reading.
+ *
+ * Lives here rather than in Window because it is about the element tree, and
+ * window.d imports this module while nothing imports window.d back.
+ */
+void updateMouseOver(Element previous, Element current, float x, float y)
+{
+    if (previous is current)
+        return;
+
+    auto leaving = chainToRoot(previous);
+    auto entering = chainToRoot(current);
+
+    // The deepest element on both chains: where the pointer has been all along.
+    Element common;
+
+    search: foreach (candidate; leaving)
+        foreach (other; entering)
+            if (other is candidate)
+            {
+                common = candidate;
+                break search;
+            }
+
+    foreach (element; leaving)
+    {
+        if (element is common)
+            break;
+
+        element.setMouseOver(false);
+        element.raiseEvent(new MouseEventArgs(mouseLeaveEvent, MouseButton.none, x, y));
+    }
+
+    // How much of the entering chain is new, so it can be walked backwards --
+    // outermost first.
+    size_t fresh;
+    foreach (element; entering)
+    {
+        if (element is common)
+            break;
+
+        ++fresh;
+    }
+
+    foreach_reverse (i; 0 .. fresh)
+    {
+        entering[i].setMouseOver(true);
+        entering[i].raiseEvent(new MouseEventArgs(mouseEnterEvent, MouseButton.none, x, y));
+    }
+}
+
+/*
+ * An element and every ancestor above it, deepest first.  Empty for null,
+ * which is what makes "the pointer is nowhere" an ordinary case rather than a
+ * branch at every use.
+ */
+private Element[] chainToRoot(Element leaf)
+{
+    Element[] chain;
+
+    for (Element e = leaf; e !is null; e = e.parent)
+        chain ~= e;
+
+    return chain;
+}
+
+public:
+
 unittest
 {
     // The events are registered once, distinctly, for Element.

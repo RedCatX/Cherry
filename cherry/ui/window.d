@@ -295,8 +295,25 @@ private:
 
         void onMouseMove(int x, int y)
         {
-            this.outer.raiseMouseEvent(mouseMoveEvent, MouseButton.none, x, y);
+            this.outer.handleMouseMove(x, y);
         }
+    }
+
+   /*
+    * Moves the pointer, then reports that it moved.
+    *
+    * That order is the point.  Enter and leave settle first, so a MouseMove
+    * handler reading isMouseOver -- on itself or on anything around it -- reads
+    * where the pointer is now rather than where it was a moment ago.
+    */
+    void handleMouseMove(int x, int y)
+    {
+        auto target = hitElement(x, y);
+
+        updateMouseOver(_mouseOver, target, x, y);
+        _mouseOver = target;
+
+        target.raiseEvent(new MouseEventArgs(mouseMoveEvent, MouseButton.none, x, y));
     }
 
    /*
@@ -504,6 +521,10 @@ private:
 
     PlatformWindow _platform;
     WindowRenderer _renderer;
+    // The element the pointer was over when it was last heard from, so the
+    // next notification can work out what changed.  Null before the pointer
+    // has ever been in the window, and again once it has left.
+    Element        _mouseOver;
     Multicast!(void delegate(Window)) _onClosed;
     Multicast!WindowClosingHandler _onClosing;
     bool _syncingFromPlatform;
@@ -681,6 +702,104 @@ unittest
     route = null;
     w.platform.host.onMouseDown(MouseButton.left, 300, 200);
     assert(route == [cast(Element) w.window]);
+}
+
+version (unittest)
+{
+   /*
+    * A box at a fixed place in its parent, and a log of what the pointer told
+    * it.  Two of these side by side inside a third is the smallest tree that
+    * has a shared ancestor to keep quiet about.
+    */
+    private class Zone : Element
+    {
+        string  name;
+        string[]* log;
+
+        this(string name, string[]* log, Rect place = Rect.init)
+        {
+            this.name = name;
+            this.log = log;
+
+            if (!place.empty)
+            {
+                width = place.width;
+                height = place.height;
+                margin = Thickness(place.x, place.y, 0, 0);
+                horizontalAlignment = HorizontalAlignment.left;
+                verticalAlignment = VerticalAlignment.top;
+            }
+
+            this.onMouseEnter ~= (Element sender, RoutedEventArgs args) {
+                *this.log ~= "enter:" ~ this.name;
+            };
+            this.onMouseLeave ~= (Element sender, RoutedEventArgs args) {
+                *this.log ~= "leave:" ~ this.name;
+            };
+        }
+    }
+}
+
+unittest
+{
+    // Moving between two children of the same parent tells the two children
+    // and leaves the parent alone -- the pointer never left it.
+    string[] log;
+
+    auto w = makeWindow();
+    auto host = new Zone("host", &log, Rect(0, 0, 200, 100));
+    auto left = new Zone("left", &log, Rect(0, 0, 100, 100));
+    auto right = new Zone("right", &log, Rect(100, 0, 100, 100));
+    host.addChild(left);
+    host.addChild(right);
+    w.window.addChild(host);
+    w.window.updateLayout();
+
+    // In from outside: everything from the window down learns about it, and
+    // the outermost hears first.
+    w.platform.host.onMouseMove(50, 50);
+    assert(log == ["enter:host", "enter:left"]);
+    assert(left.isMouseOver && host.isMouseOver && w.window.isMouseOver);
+
+    // Across the boundary: one leaves, one arrives, and host says nothing.
+    log = null;
+    w.platform.host.onMouseMove(150, 50);
+    assert(log == ["leave:left", "enter:right"]);
+    assert(right.isMouseOver && host.isMouseOver);
+    assert(!left.isMouseOver);
+
+    // Within the same element there is nothing to report at all.
+    log = null;
+    w.platform.host.onMouseMove(160, 60);
+    assert(log == []);
+
+    // Out of the tree but still in the window: the deepest first on the way
+    // out, and the window itself is still under the pointer.
+    log = null;
+    w.platform.host.onMouseMove(400, 300);
+    assert(log == ["leave:right", "leave:host"]);
+    assert(!right.isMouseOver && !host.isMouseOver);
+    assert(w.window.isMouseOver, "the pointer is still inside the window");
+}
+
+unittest
+{
+    // A move handler reads the pointer's state as it is now, not as it was --
+    // which is what the ordering inside handleMouseMove buys.
+    string[] log;
+
+    auto w = makeWindow();
+    auto zone = new Zone("zone", &log, Rect(0, 0, 100, 100));
+    w.window.addChild(zone);
+    w.window.updateLayout();
+
+    bool overWhenMoved;
+    zone.onMouseMove ~= (Element sender, RoutedEventArgs args) {
+        overWhenMoved = (cast(Element) sender).isMouseOver;
+    };
+
+    w.platform.host.onMouseMove(50, 50);
+    assert(overWhenMoved, "enter had already run by the time move was raised");
 }
 
 unittest
