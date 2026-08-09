@@ -37,19 +37,47 @@ class HelloWindow : Window
  */
 class Swatch : Element
 {
-    this(Color color, float thickness)
+    this(string name, Color color, float thickness)
     {
+        _name = name;
         _color = color;
         height = thickness;
+
+        // The pointer arriving and leaving is all the state a hover needs.
+        // The repaint is asked for by hand: IsMouseOver deliberately does not
+        // carry affectsRender, because most elements on the chain look exactly
+        // the same hovered as not, and a control that does change says so.
+        this.onMouseEnter ~= (Element sender, RoutedEventArgs args) { invalidateVisual(); };
+        this.onMouseLeave ~= (Element sender, RoutedEventArgs args) { invalidateVisual(); };
+
+        this.onMouseDown ~= (Element sender, RoutedEventArgs args) {
+            auto mouse = cast(MouseEventArgs) args;
+            auto local = mouse.getPosition(this);
+            writefln("%s clicked at (%.0f, %.0f) of its own space", _name, local.x, local.y);
+
+            // Claimed, so the window's own handler leaves it alone -- the band
+            // dealt with this click and nobody above needs to guess whether it
+            // was meant for them.
+            args.handled = true;
+        };
     }
 
     protected override void onRender(DrawingContext context)
     {
-        context.fillRectangle(Rect(0, 0, actualWidth, actualHeight), _color);
+        context.fillRectangle(Rect(0, 0, actualWidth, actualHeight),
+                              isMouseOver ? lighten(_color) : _color);
     }
 
 private:
-    Color _color;
+    static Color lighten(Color c)
+    {
+        return Color.rgb(c.r + (1 - c.r) * 0.45,
+                         c.g + (1 - c.g) * 0.45,
+                         c.b + (1 - c.b) * 0.45);
+    }
+
+    string _name;
+    Color  _color;
 }
 
 // The same words in the window and in the system's own dialog, so the two can
@@ -85,14 +113,18 @@ void main()
 
     stripes.addChild(caption);
 
-    stripes.addChild(new Swatch(Color.rgb(0.82, 0.06, 0.16), 40));
-    stripes.addChild(new Swatch(Color.rgb(0.90, 0.10, 0.20), 26));
+    // Each band lights up under the pointer and names itself when clicked.
+    // Nothing here says where any of them is: the hit test walks the same
+    // placements the render walk does, so a band that the panel moves is a band
+    // the mouse follows.
+    stripes.addChild(new Swatch("dark red", Color.rgb(0.82, 0.06, 0.16), 40));
+    stripes.addChild(new Swatch("bright red", Color.rgb(0.90, 0.10, 0.20), 26));
 
-    auto inset = new Swatch(Color.rgb(0.22, 0.62, 0.28), 26);
+    auto inset = new Swatch("green", Color.rgb(0.22, 0.62, 0.28), 26);
     inset.margin = Thickness(24, 0, 8, 0);
     stripes.addChild(inset);
 
-    stripes.addChild(new Swatch(Color.rgb(0.45, 0.30, 0.12), 12));
+    stripes.addChild(new Swatch("brown", Color.rgb(0.45, 0.30, 0.12), 12));
 
     window.addChild(stripes);
 
@@ -107,9 +139,12 @@ void main()
 
     window.addChild(footer);
 
+    // Everything a band did not claim arrives here on the way up, with args
+    // naming whatever was actually under the pointer.
     window.onMouseDown ~= (Element sender, RoutedEventArgs args) {
         auto mouse = cast(MouseEventArgs) args;
-        writefln("mouse %s down at (%s, %s)", mouse.button, mouse.x, mouse.y);
+        writefln("mouse %s down at (%.0f, %.0f) over %s",
+                 mouse.button, mouse.x, mouse.y, typeid(args.source).name);
 
         // The same sentence, drawn by the system instead of by us.  A
         // MessageBox is a classic GDI dialog, which is the picture
