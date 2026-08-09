@@ -783,6 +783,7 @@
     <Folder name="win32">
      <File path="cherry\platform\win32\d2d1.d" />
      <File path="cherry\platform\win32\dialog.d" />
+     <File path="cherry\platform\win32\dwrite.d" />
      <File path="cherry\platform\win32\entrypoint.d" />
      <File path="cherry\platform\win32\eventloop.d" />
      <File path="cherry\platform\win32\render.d" />
