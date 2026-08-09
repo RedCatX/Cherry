@@ -75,10 +75,9 @@ private:
 }
 
 /**
- * The mouse routed events, registered for every Element.  Until layout and
- * hit-testing exist, the platform input is raised on the top-level Window
- * element; once elements have bounds, the deepest hit element becomes the
- * route target instead.
+ * The mouse routed events, registered for every Element.  The window
+ * hit-tests each native notification and raises these on the deepest element
+ * under the pointer, so they travel up from there.
  */
 immutable RoutedEvent mouseDownEvent;
 /// ditto
@@ -86,11 +85,27 @@ immutable RoutedEvent mouseUpEvent;
 /// ditto
 immutable RoutedEvent mouseMoveEvent;
 
+/**
+ * The pointer arrived over an element, or left it.
+ *
+ * **Direct, not bubbling**, which is WPF's choice and worth understanding:
+ * the pointer moving from one child to another has not left their common
+ * parent, so an event travelling up would tell that parent it was left and
+ * entered again on every move across a boundary inside it.  The chain is built
+ * the other way instead -- the window works out which elements the change
+ * really affects and raises the event on each of them separately.
+ */
+immutable RoutedEvent mouseEnterEvent;
+/// ditto
+immutable RoutedEvent mouseLeaveEvent;
+
 shared static this()
 {
-    mouseDownEvent = RoutedEvent.register("MouseDown", RoutingStrategy.bubble, getRtti!Element());
-    mouseUpEvent   = RoutedEvent.register("MouseUp", RoutingStrategy.bubble, getRtti!Element());
-    mouseMoveEvent = RoutedEvent.register("MouseMove", RoutingStrategy.bubble, getRtti!Element());
+    mouseDownEvent  = RoutedEvent.register("MouseDown", RoutingStrategy.bubble, getRtti!Element());
+    mouseUpEvent    = RoutedEvent.register("MouseUp", RoutingStrategy.bubble, getRtti!Element());
+    mouseMoveEvent  = RoutedEvent.register("MouseMove", RoutingStrategy.bubble, getRtti!Element());
+    mouseEnterEvent = RoutedEvent.register("MouseEnter", RoutingStrategy.direct, getRtti!Element());
+    mouseLeaveEvent = RoutedEvent.register("MouseLeave", RoutingStrategy.direct, getRtti!Element());
 }
 
 /**
@@ -114,6 +129,18 @@ shared static this()
     return routedAccessor(element, mouseMoveEvent);
 }
 
+/// ditto
+@property auto onMouseEnter(Element element)
+{
+    return routedAccessor(element, mouseEnterEvent);
+}
+
+/// ditto
+@property auto onMouseLeave(Element element)
+{
+    return routedAccessor(element, mouseLeaveEvent);
+}
+
 unittest
 {
     // The events are registered once, distinctly, for Element.
@@ -121,6 +148,29 @@ unittest
     assert(mouseDownEvent.id != mouseUpEvent.id && mouseUpEvent.id != mouseMoveEvent.id);
     assert(mouseDownEvent.routingStrategy == RoutingStrategy.bubble);
     assert(mouseDownEvent.ownerType is getRtti!Element());
+
+    // Enter and leave do not travel, and the whole design of the chain rests
+    // on that: raising them on each affected element is what a bubbling
+    // version would get wrong.
+    assert(mouseEnterEvent.routingStrategy == RoutingStrategy.direct);
+    assert(mouseLeaveEvent.routingStrategy == RoutingStrategy.direct);
+    assert(mouseEnterEvent.id != mouseLeaveEvent.id);
+}
+
+unittest
+{
+    // Nobody is under the pointer until somebody says so, and only this
+    // package can say it.
+    auto element = new Element;
+
+    assert(!element.isMouseOver);
+    assert(Element.isMouseOverProperty.isReadOnly, "user code reports on the pointer, never moves it");
+
+    element.setMouseOver(true);
+    assert(element.isMouseOver);
+
+    element.setMouseOver(false);
+    assert(!element.isMouseOver);
 }
 
 unittest

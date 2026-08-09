@@ -81,6 +81,20 @@ class Element : Visual
         actualWidthKey  = Property.registerReadOnly("ActualWidth",  getRtti!float(), getRtti!Element(), actualMeta);
         actualHeightKey = Property.registerReadOnly("ActualHeight", getRtti!float(), getRtti!Element(), actualMeta);
 
+        // Written by the input code as the pointer moves and by nothing else,
+        // so it takes a key too.
+        //
+        // No affectsRender, deliberately.  Most elements on the chain look
+        // exactly the same hovered as not -- every container between the
+        // pointer and the window is on it -- and a flag here would ask each of
+        // them for a repaint on every crossing.  A control that does change
+        // appearance says so itself from its handler, and when there are styles
+        // a trigger will say it instead.
+        PropertyMetadata mouseOverMeta;
+        mouseOverMeta.defaultValue = Value(false);
+
+        isMouseOverKey = Property.registerReadOnly("IsMouseOver", getRtti!bool(), getRtti!Element(), mouseOverMeta);
+
         // Space the element keeps clear around itself, and therefore part of
         // what it costs its parent: a margin changes the answer measure gives,
         // not merely where arrange puts things.
@@ -155,6 +169,29 @@ class Element : Visual
     static @property immutable(Property) actualHeightProperty() pure nothrow
     {
         return actualHeightKey.property;
+    }
+
+   /**
+    * Whether the pointer is over this element or over anything inside it.
+    *
+    * True for every element between the one under the pointer and the root, so
+    * a container knows the mouse is somewhere in it without watching each of
+    * its children.  That is what makes it the thing a control's appearance
+    * hangs off: a button stays lit while the pointer is over its label.
+    *
+    * Read-only, and the key never leaves this class: the pointer's position is
+    * something the framework knows and user code reports on, never the other
+    * way round.
+    */
+    static @property immutable(Property) isMouseOverProperty() pure nothrow
+    {
+        return isMouseOverKey.property;
+    }
+
+    /// ditto
+    @property bool isMouseOver() const
+    {
+        return getValue(isMouseOverProperty).get!bool;
     }
 
    /**
@@ -967,6 +1004,19 @@ class Element : Visual
         return _children[index];
     }
 
+package:
+   /*
+    * Records that the pointer is or is not over this element.
+    *
+    * The write side of isMouseOver, and the reason the key stays private: the
+    * input code in this package is the only thing that knows where the pointer
+    * is, and possession of the key is the permission to say so.
+    */
+    void setMouseOver(bool value)
+    {
+        setValue(isMouseOverKey, Value(value));
+    }
+
 protected:
    /**
     * Puts a repaint request on the layout pass's queue.
@@ -1220,6 +1270,7 @@ private:
     // let anyone claim an element is a size it was never arranged at.
     static immutable(ReadOnlyPropertyKey) actualWidthKey;
     static immutable(ReadOnlyPropertyKey) actualHeightKey;
+    static immutable(ReadOnlyPropertyKey) isMouseOverKey;
 
     Element              _parent;
     Element[]            _children;
