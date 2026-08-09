@@ -84,6 +84,12 @@ struct D2D1_ELLIPSE
     float radiusX, radiusY;
 }
 
+struct D2D1_ROUNDED_RECT
+{
+    D2D1_RECT_F rect;
+    float radiusX, radiusY;
+}
+
 struct D2D1_MATRIX_3X2_F
 {
     float _11, _12, _21, _22, _31, _32;
@@ -222,9 +228,9 @@ extern (Windows):
     void DrawRectangle(const(D2D1_RECT_F)* rect, ID2D1Brush brush,
                        float strokeWidth, void* strokeStyle);
     void FillRectangle(const(D2D1_RECT_F)* rect, ID2D1Brush brush);
-    void DrawRoundedRectangle(const(void)* roundedRect, ID2D1Brush brush,
+    void DrawRoundedRectangle(const(D2D1_ROUNDED_RECT)* roundedRect, ID2D1Brush brush,
                               float strokeWidth, void* strokeStyle);
-    void FillRoundedRectangle(const(void)* roundedRect, ID2D1Brush brush);
+    void FillRoundedRectangle(const(D2D1_ROUNDED_RECT)* roundedRect, ID2D1Brush brush);
     void DrawEllipse(const(D2D1_ELLIPSE)* ellipse, ID2D1Brush brush,
                      float strokeWidth, void* strokeStyle);
     void FillEllipse(const(D2D1_ELLIPSE)* ellipse, ID2D1Brush brush);

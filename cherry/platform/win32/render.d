@@ -245,6 +245,25 @@ private final class D2DDrawingContext : DrawingContext
         }
     }
 
+    void fillRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint)
+    {
+        if (auto brush = deviceBrush(paint, rect))
+        {
+            auto rounded = toRoundedRect(rect, radiusX, radiusY);
+            _target.FillRoundedRectangle(&rounded, brush);
+        }
+    }
+
+    void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint,
+                              float strokeWidth = 1)
+    {
+        if (auto brush = deviceBrush(paint, rect))
+        {
+            auto rounded = toRoundedRect(rect, radiusX, radiusY);
+            _target.DrawRoundedRectangle(&rounded, brush, strokeWidth, null);
+        }
+    }
+
     void fillEllipse(Rect bounds, Paint paint)
     {
         if (auto brush = deviceBrush(paint, bounds))
@@ -526,6 +545,11 @@ private:
     static D2D1_RECT_F toRectF(Rect rect) pure nothrow @nogc
     {
         return D2D1_RECT_F(rect.x, rect.y, rect.right, rect.bottom);
+    }
+
+    static D2D1_ROUNDED_RECT toRoundedRect(Rect rect, float radiusX, float radiusY) pure nothrow @nogc
+    {
+        return D2D1_ROUNDED_RECT(toRectF(rect), radiusX, radiusY);
     }
 
     static D2D1_ELLIPSE toEllipse(Rect bounds) pure nothrow @nogc

@@ -886,6 +886,23 @@ interface DrawingContext
     /// ditto
     void drawRectangle(Rect rect, Paint paint, float strokeWidth = 1);
 
+   /**
+    * The same pair with the corners cut to a quarter ellipse.
+    *
+    * Two radii rather than one, because that is the shape the backends draw and
+    * throwing the second away here would put it out of reach for good.  A
+    * control wanting round corners passes the same number twice.
+    *
+    * Every corner gets the same radius.  Four different ones -- and a border
+    * whose thickness varies from side to side -- need a geometry with an
+    * even-odd fill, which is its own piece of work and arrives with Border.
+    */
+    void fillRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint);
+
+    /// ditto
+    void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint,
+                              float strokeWidth = 1);
+
     /// ditto
     void fillEllipse(Rect bounds, Paint paint);
 
@@ -1003,7 +1020,8 @@ version (unittest)
     */
     class RecordingContext : DrawingContext
     {
-        enum Kind { clear, fillRectangle, drawRectangle, fillEllipse, drawEllipse, line, text }
+        enum Kind { clear, fillRectangle, drawRectangle, fillRoundedRectangle,
+                    drawRoundedRectangle, fillEllipse, drawEllipse, line, text }
 
        /**
         * One recorded primitive.  rect carries the transformed bounds of the
@@ -1045,6 +1063,11 @@ version (unittest)
 
             /// What was actually asked for, whatever kind it turned out to be.
             Paint  paint;
+
+            /// The corner radii, for the two rounded kinds and nothing else.
+            float  radiusX = 0;
+            /// ditto
+            float  radiusY = 0;
         }
 
         Entry[] entries;
@@ -1063,6 +1086,17 @@ version (unittest)
         void drawRectangle(Rect rect, Paint paint, float strokeWidth = 1)
         {
             record(Kind.drawRectangle, rect, paint, strokeWidth);
+        }
+
+        void fillRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint)
+        {
+            record(Kind.fillRoundedRectangle, rect, paint, 0, radiusX, radiusY);
+        }
+
+        void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint,
+                                  float strokeWidth = 1)
+        {
+            record(Kind.drawRoundedRectangle, rect, paint, strokeWidth, radiusX, radiusY);
         }
 
         void fillEllipse(Rect bounds, Paint paint)
@@ -1107,11 +1141,12 @@ version (unittest)
         @property size_t depth() { return _transforms.depth; }
 
     private:
-        void record(Kind kind, Rect rect, Paint paint, float strokeWidth)
+        void record(Kind kind, Rect rect, Paint paint, float strokeWidth,
+                    float radiusX = 0, float radiusY = 0)
         {
             entries ~= Entry(kind, mapBounds(_transforms.current, rect),
                              Point.init, Point.init, resolveColor(paint), strokeWidth,
-                             _transforms.current, null, paint);
+                             _transforms.current, null, paint, radiusX, radiusY);
         }
 
        /*
@@ -1308,4 +1343,31 @@ unittest
            "the origin moved by the transform, and the box is the layout's own size");
     assert(entry.color == Color.black, "resolved from the paint, because it is a flat one");
     assert(entry.paint is ink, "and the paint itself is on the record too");
+}
+
+unittest
+{
+    // A rounded rectangle is recorded like a plain one, with the radii beside
+    // it -- and the transform applies to the box, not to the corners, which is
+    // why they are kept as they were given.
+    auto ink = new FakeSolidPaint(Color.white);
+    auto context = new RecordingContext;
+
+    context.pushTransform(Matrix.translation(10, 20));
+    context.fillRoundedRectangle(Rect(0, 0, 100, 40), 6, 4, ink);
+    context.drawRoundedRectangle(Rect(0, 0, 100, 40), 6, 6, ink, 2);
+    context.popTransform();
+
+    assert(context.entries[0].kind == RecordingContext.Kind.fillRoundedRectangle);
+    assert(context.entries[0].rect == Rect(10, 20, 100, 40));
+    assert(context.entries[0].radiusX == 6 && context.entries[0].radiusY == 4,
+           "two radii, because that is the shape a backend draws");
+    assert(context.entries[0].strokeWidth == 0);
+
+    assert(context.entries[1].kind == RecordingContext.Kind.drawRoundedRectangle);
+    assert(context.entries[1].strokeWidth == 2);
+
+    // And the plain kinds carry no radii, so a test cannot read one by accident.
+    context.fillRectangle(Rect(0, 0, 10, 10), ink);
+    assert(context.entries[2].radiusX == 0 && context.entries[2].radiusY == 0);
 }
