@@ -787,6 +787,7 @@
      <File path="cherry\platform\win32\entrypoint.d" />
      <File path="cherry\platform\win32\eventloop.d" />
      <File path="cherry\platform\win32\render.d" />
+     <File path="cherry\platform\win32\text.d" />
      <File path="cherry\platform\win32\window.d" />
     </Folder>
     <File path="cherry\platform\dialog.d" />
