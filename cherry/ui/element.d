@@ -1157,7 +1157,7 @@ protected:
     * Inherited property values flow down the element tree: the inheritance
     * context of an element is its tree parent.
     */
-    override @property inout(CherryObject) inheritanceParent() inout pure nothrow @nogc
+    override @property const(CherryObject) inheritanceParent() const pure nothrow @nogc
     {
         return _parent;
     }

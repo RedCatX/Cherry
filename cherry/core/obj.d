@@ -152,10 +152,17 @@ class CherryObject : DispatcherObject
 protected:
    /**
     * The object that supplies inherited property values, or null when this
-    * object has no inheritance context.  Element overrides this to return
-    * its tree parent; plain property-bearing objects do not inherit.
+    * object has no inheritance context.  A layer with a tree overrides this to
+    * return the node above; plain property-bearing objects do not inherit.
+    *
+    * `const` and not `inout`, although a mutable caller would rather have a
+    * mutable answer: the only two readers are getValue and findInheritedValue,
+    * both `const`, and inout on a virtual property has to be carried by every
+    * override and by anything they in turn delegate to.  Nothing here has ever
+    * needed to write through this, so the qualifier that costs least is the
+    * one that says so.
     */
-    @property inout(CherryObject) inheritanceParent() inout pure nothrow @nogc
+    @property const(CherryObject) inheritanceParent() const pure nothrow @nogc
     {
         return null;
     }
