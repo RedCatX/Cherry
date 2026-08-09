@@ -155,14 +155,14 @@ protected:
     * object has no inheritance context.  A layer with a tree overrides this to
     * return the node above; plain property-bearing objects do not inherit.
     *
-    * `const` and not `inout`, although a mutable caller would rather have a
-    * mutable answer: the only two readers are getValue and findInheritedValue,
-    * both `const`, and inout on a virtual property has to be carried by every
-    * override and by anything they in turn delegate to.  Nothing here has ever
-    * needed to write through this, so the qualifier that costs least is the
-    * one that says so.
+    * `const` and not `inout`: the only two readers are getValue and
+    * findInheritedValue, both `const` and neither writing through the result,
+    * so a mutable answer would be a qualifier every override has to carry for
+    * nobody's benefit.  Unattributed for the same reason -- a layer answering
+    * this from a lookup rather than from a field cannot honour `pure nothrow
+    * @nogc`, and neither reader needs it.
     */
-    @property const(CherryObject) inheritanceParent() const pure nothrow @nogc
+    @property const(CherryObject) inheritanceParent() const
     {
         return null;
     }

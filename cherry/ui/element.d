@@ -8,6 +8,7 @@ import cherry.core.value;
 import cherry.platform.render : DrawingContext, Matrix, Rect, Size, Thickness;
 import cherry.ui.event;
 import cherry.ui.layout : LayoutManager;
+import cherry.ui.styledelement;
 
 /**
  * Where an element sits in the horizontal room its parent gave it.
@@ -56,7 +57,7 @@ enum VerticalAlignment
  *   - an element can have at most one parent (detach before re-adding);
  *   - the tree is acyclic (an ancestor cannot become a child).
  */
-class Element : CherryObject
+class Element : StyledElement
 {
     shared static this()
     {
@@ -345,6 +346,21 @@ class Element : CherryObject
     * The element this one is parented to, or null for a tree root.
     */
     @property inout(Element) parent() inout pure nothrow @nogc
+    {
+        return _parent;
+    }
+
+   /**
+    * The logical parent, which today is the tree parent.
+    *
+    * The element tree is the only tree there is, so it answers for the logical
+    * one as well.  The two part company when control templates arrive: a
+    * button's border and its text will be visual children of the button and
+    * logical children of nobody, and on that day the storage moves to
+    * StyledElement and this override goes away.  Nothing at a call site
+    * changes when it does, which is the reason the seam exists now.
+    */
+    override @property inout(Element) logicalParent() inout
     {
         return _parent;
     }
@@ -1153,14 +1169,6 @@ protected:
     {
     }
 
-   /**
-    * Inherited property values flow down the element tree: the inheritance
-    * context of an element is its tree parent.
-    */
-    override @property const(CherryObject) inheritanceParent() const pure nothrow @nogc
-    {
-        return _parent;
-    }
 
    /**
     * Turns a property change into layout invalidation, as the property's

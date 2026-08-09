@@ -5,4 +5,5 @@ public import cherry.ui.element;
 public import cherry.ui.event;
 public import cherry.ui.input;
 public import cherry.ui.layout;
+public import cherry.ui.styledelement;
 public import cherry.ui.window;
