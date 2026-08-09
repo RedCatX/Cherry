@@ -37,6 +37,16 @@ enum D2D1_PRESENT_OPTIONS_NONE = 0;
 enum DXGI_FORMAT_UNKNOWN     = 0;
 enum D2D1_ALPHA_MODE_UNKNOWN = 0;
 
+// Which space the colours between two stops are mixed in.  2.2 is the one
+// Direct2D means by "the usual"; 1.0 is linear and is what a physically
+// correct blend wants.
+enum D2D1_GAMMA_2_2 = 0;
+enum D2D1_GAMMA_1_0 = 1;
+
+enum D2D1_EXTEND_MODE_CLAMP  = 0;
+enum D2D1_EXTEND_MODE_WRAP   = 1;
+enum D2D1_EXTEND_MODE_MIRROR = 2;
+
 enum HRESULT D2DERR_RECREATE_TARGET = 0x8899000C;
 
 alias D2D1_TAG = ulong;
@@ -108,6 +118,18 @@ struct D2D1_BRUSH_PROPERTIES
     D2D1_MATRIX_3X2_F transform;
 }
 
+struct D2D1_GRADIENT_STOP
+{
+    float position;
+    D2D1_COLOR_F color;
+}
+
+struct D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES
+{
+    D2D1_POINT_2F startPoint;
+    D2D1_POINT_2F endPoint;
+}
+
 // ----------------------------------------------------------------- GUIDs --
 
 immutable IID IID_ID2D1Factory =
@@ -137,6 +159,34 @@ extern (Windows):
     void GetColor(D2D1_COLOR_F* result);   // hidden-pointer aggregate return
 }
 
+/**
+ * The colours of a gradient, kept apart from the brushes that use them so that
+ * a ramp can be shared -- and, more to the point here, so that it is built once
+ * per brush rather than once per fill.
+ */
+interface ID2D1GradientStopCollection : ID2D1Resource
+{
+extern (Windows):
+    uint GetGradientStopCount();
+    void GetGradientStops(D2D1_GRADIENT_STOP* gradientStops, uint gradientStopsCount);
+    int  GetColorInterpolationGamma();
+    int  GetExtendMode();
+}
+
+interface ID2D1LinearGradientBrush : ID2D1Brush
+{
+extern (Windows):
+    void SetStartPoint(D2D1_POINT_2F startPoint);
+    void SetEndPoint(D2D1_POINT_2F endPoint);
+    // Both of these return D2D1_POINT_2F by value in C++, which on Win64 means
+    // a hidden out-pointer -- the rule the banner at the top of this file is
+    // about.  Declared with the pointer and never called: the framework sets
+    // the ends on every fill and has no reason to read them back.
+    void GetStartPoint(D2D1_POINT_2F* result);
+    void GetEndPoint(D2D1_POINT_2F* result);
+    void GetGradientStopCollection(ID2D1GradientStopCollection* gradientStopCollection);
+}
+
 interface ID2D1RenderTarget : ID2D1Resource
 {
 extern (Windows):
@@ -151,12 +201,13 @@ extern (Windows):
     HRESULT CreateSolidColorBrush(const(D2D1_COLOR_F)* color,
                                   const(D2D1_BRUSH_PROPERTIES)* brushProperties,
                                   ID2D1SolidColorBrush* brush);
-    HRESULT CreateGradientStopCollection(const(void)* gradientStops, uint gradientStopsCount,
+    HRESULT CreateGradientStopCollection(const(D2D1_GRADIENT_STOP)* gradientStops, uint gradientStopsCount,
                                          int colorInterpolationGamma, int extendMode,
-                                         void** gradientStopCollection);
-    HRESULT CreateLinearGradientBrush(const(void)* linearGradientBrushProperties,
+                                         ID2D1GradientStopCollection* gradientStopCollection);
+    HRESULT CreateLinearGradientBrush(const(D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES)* linearGradientBrushProperties,
                                       const(D2D1_BRUSH_PROPERTIES)* brushProperties,
-                                      void* gradientStopCollection, void** linearGradientBrush);
+                                      ID2D1GradientStopCollection gradientStopCollection,
+                                      ID2D1LinearGradientBrush* linearGradientBrush);
     HRESULT CreateRadialGradientBrush(const(void)* radialGradientBrushProperties,
                                       const(D2D1_BRUSH_PROPERTIES)* brushProperties,
                                       void* gradientStopCollection, void** radialGradientBrush);
