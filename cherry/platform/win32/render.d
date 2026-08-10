@@ -236,12 +236,12 @@ private final class D2DDrawingContext : DrawingContext
         }
     }
 
-    void drawRectangle(Rect rect, Paint paint, float strokeWidth = 1)
+    void drawRectangle(Rect rect, Stroke stroke)
     {
-        if (auto brush = deviceBrush(paint, rect))
+        if (auto brush = deviceBrush(stroke.paint, rect))
         {
             auto area = toRectF(rect);
-            _target.DrawRectangle(&area, brush, strokeWidth, null);
+            _target.DrawRectangle(&area, brush, stroke.thickness, deviceStrokeStyle(stroke));
         }
     }
 
@@ -254,13 +254,13 @@ private final class D2DDrawingContext : DrawingContext
         }
     }
 
-    void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint,
-                              float strokeWidth = 1)
+    void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Stroke stroke)
     {
-        if (auto brush = deviceBrush(paint, rect))
+        if (auto brush = deviceBrush(stroke.paint, rect))
         {
             auto rounded = toRoundedRect(rect, radiusX, radiusY);
-            _target.DrawRoundedRectangle(&rounded, brush, strokeWidth, null);
+            _target.DrawRoundedRectangle(&rounded, brush, stroke.thickness,
+                                         deviceStrokeStyle(stroke));
         }
     }
 
@@ -273,16 +273,16 @@ private final class D2DDrawingContext : DrawingContext
         }
     }
 
-    void drawEllipse(Rect bounds, Paint paint, float strokeWidth = 1)
+    void drawEllipse(Rect bounds, Stroke stroke)
     {
-        if (auto brush = deviceBrush(paint, bounds))
+        if (auto brush = deviceBrush(stroke.paint, bounds))
         {
             auto ellipse = toEllipse(bounds);
-            _target.DrawEllipse(&ellipse, brush, strokeWidth, null);
+            _target.DrawEllipse(&ellipse, brush, stroke.thickness, deviceStrokeStyle(stroke));
         }
     }
 
-    void drawLine(Point from, Point to, Paint paint, float strokeWidth = 1)
+    void drawLine(Point from, Point to, Stroke stroke)
     {
         // A gradient reads its ends as fractions of what is being filled, and
         // for a line that is the box the segment spans.  A line running the
@@ -293,9 +293,9 @@ private final class D2DDrawingContext : DrawingContext
                               from.x < to.x ? to.x - from.x : from.x - to.x,
                               from.y < to.y ? to.y - from.y : from.y - to.y);
 
-        if (auto brush = deviceBrush(paint, span))
+        if (auto brush = deviceBrush(stroke.paint, span))
             _target.DrawLine(D2D1_POINT_2F(from.x, from.y), D2D1_POINT_2F(to.x, to.y),
-                             brush, strokeWidth, null);
+                             brush, stroke.thickness, deviceStrokeStyle(stroke));
     }
 
    /**
@@ -408,6 +408,18 @@ private:
         if (auto gradient = cast(GradientPaint) paint)
             return linearGradientBrush(gradient, bounds);
 
+        return null;
+    }
+
+   /*
+    * The Direct2D object describing the shape of a stroke, or null for the
+    * plain one -- which is not a failure but the fast answer: null is exactly
+    * how Direct2D spells "solid, flat ends, mitred corners".
+    *
+    * Shapes other than the plain one are not built yet.
+    */
+    void* deviceStrokeStyle(Stroke stroke)
+    {
         return null;
     }
 

@@ -26,8 +26,8 @@ class HelloWindow : Window
     protected override void onRender(DrawingContext context)
     {
         // Stems.
-        context.drawLine(Point(400, 120), Point(330, 270), _stem, 6);
-        context.drawLine(Point(400, 120), Point(470, 260), _stem, 6);
+        context.drawLine(Point(400, 120), Point(330, 270), Stroke(_stem, 6));
+        context.drawLine(Point(400, 120), Point(470, 260), Stroke(_stem, 6));
 
         // A leaf at the join.
         context.fillEllipse(Rect(392, 96, 110, 44), _leaf);

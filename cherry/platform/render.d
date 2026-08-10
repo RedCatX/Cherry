@@ -657,6 +657,138 @@ unittest
 }
 
 /**
+ * How a stroke is broken up along its length.
+ *
+ * The names are WPF's DashStyles, and Direct2D's D2D1_DASH_STYLE has the same
+ * five.  A pattern of one's own -- an array of lengths -- is deliberately not
+ * here: it would put an array inside a struct that has to stay cheap to copy
+ * and cheap to compare, and nothing wants one yet.
+ */
+enum DashStyle
+{
+    solid,
+    dash,
+    dot,
+    dashDot,
+    dashDotDot
+}
+
+/**
+ * How a stroke ends: at its two ends, and at every dash in between.
+ */
+enum LineCap
+{
+    /// Cut off exactly at the end point.
+    flat,
+    /// A square half a thickness past it.
+    square,
+    /// A half disc.
+    round,
+    /// A triangle.
+    triangle
+}
+
+/**
+ * How two segments of a stroke meet.
+ */
+enum LineJoin
+{
+    /// Carried on to a point, however far away that turns out to be.
+    miter,
+    /// Cut straight across.
+    bevel,
+    /// Filled with an arc.
+    round,
+    /// Mitred until the point would run past the miter limit, then cut across.
+    miterOrBevel
+}
+
+/**
+ * Everything about a line being drawn: what colours it, how thick it is, and
+ * what shape its ends, its joins and its dashes take.
+ *
+ * **A struct, and a Pen is the object** -- the same split TextFormat already
+ * makes, for the same reason.  The parts belong on something with properties,
+ * so they can be styled, bound and animated; but the thing handed to a drawing
+ * call is assembled at the moment of drawing and must cost nothing to make.  A
+ * Pen is a CherryObject and a CherryObject binds to a dispatcher when it is
+ * built, so a control that needed one per frame would be building one per
+ * frame.
+ *
+ * For the same reason this must **not** become a property value.  Value
+ * compares a struct byte for byte, so the paint inside would compare by
+ * pointer; Pen is what a property holds.
+ *
+ * Note the constructor kills the implicit field-wise literal, exactly as
+ * Thickness's does: `Stroke(brush, 2)` is a paint and a width, not the first
+ * two fields of the struct.
+ */
+struct Stroke
+{
+    Paint     paint;
+    float     thickness = 1;
+
+    DashStyle dashStyle;
+    LineCap   startCap;
+    LineCap   endCap;
+    LineCap   dashCap;
+    LineJoin  lineJoin;
+
+    /// How far a mitre may run past the join before miterOrBevel cuts it off.
+    float     miterLimit = 10;
+
+    /// Where in the dash pattern the line starts, in thicknesses.
+    float     dashOffset = 0;
+
+    this(Paint paint, float thickness = 1) pure nothrow @nogc
+    {
+        this.paint = paint;
+        this.thickness = thickness;
+    }
+
+   /**
+    * Whether the shape of the line -- everything except what colours it and how
+    * thick it is -- is the plain one.
+    *
+    * Worth asking because it is the overwhelmingly common answer, and a backend
+    * that has to build an object to describe a stroke's shape can skip building
+    * one entirely when the shape is the one it already draws by default.
+    */
+    @property bool hasPlainShape() const pure nothrow @nogc
+    {
+        return dashStyle == DashStyle.solid
+            && startCap == LineCap.flat
+            && endCap == LineCap.flat
+            && dashCap == LineCap.flat
+            && lineJoin == LineJoin.miter
+            && miterLimit == 10
+            && dashOffset == 0;
+    }
+}
+
+unittest
+{
+    // What a stroke nobody has shaped is: a hairline with square-cut ends and
+    // mitred corners, which is what every backend draws without being asked.
+    immutable plain = Stroke.init;
+
+    assert(plain.paint is null);
+    assert(plain.thickness == 1);
+    assert(plain.dashStyle == DashStyle.solid);
+    assert(plain.lineJoin == LineJoin.miter);
+    assert(plain.hasPlainShape);
+
+    // The constructor takes what almost every caller has: something to draw
+    // with, and how wide.
+    auto stroke = Stroke(null, 3);
+    assert(stroke.thickness == 3);
+    assert(stroke.hasPlainShape, "a width is not a shape");
+
+    stroke.dashStyle = DashStyle.dot;
+    assert(!stroke.hasPlainShape);
+}
+
+/**
  * How heavy the strokes of a face are, on the scale every font format uses.
  *
  * The numbers are the weights themselves rather than an ordinal, because they
@@ -869,7 +1001,7 @@ interface DrawingContext
     void clear(Color color);
 
    /**
-    * Fills and strokes, each with a paint rather than a colour.
+    * Fills with a paint, strokes with a Stroke.
     *
     * A paint that is a gradient reads its ends as fractions of what is being
     * filled, so every one of these hands the paint its own geometry: the
@@ -877,14 +1009,14 @@ interface DrawingContext
     * for a line.  That is the whole reason a fill has to know what it is
     * filling and cannot simply be handed a colour.
     *
-    * A stroke is a paint and a width and nothing else.  A Pen -- dashes, caps,
-    * joins -- is a thing of its own and is not here yet; when it arrives these
-    * take one instead of the pair.
+    * A stroke carries its own paint, so the two never take both -- and there is
+    * one way to stroke rather than a pair of overloads, which is why the plain
+    * case reads `Stroke(brush, 2)` rather than passing the two separately.
     */
     void fillRectangle(Rect rect, Paint paint);
 
     /// ditto
-    void drawRectangle(Rect rect, Paint paint, float strokeWidth = 1);
+    void drawRectangle(Rect rect, Stroke stroke);
 
    /**
     * The same pair with the corners cut to a quarter ellipse.
@@ -900,17 +1032,16 @@ interface DrawingContext
     void fillRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint);
 
     /// ditto
-    void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint,
-                              float strokeWidth = 1);
+    void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Stroke stroke);
 
     /// ditto
     void fillEllipse(Rect bounds, Paint paint);
 
     /// ditto
-    void drawEllipse(Rect bounds, Paint paint, float strokeWidth = 1);
+    void drawEllipse(Rect bounds, Stroke stroke);
 
     /// ditto
-    void drawLine(Point from, Point to, Paint paint, float strokeWidth = 1);
+    void drawLine(Point from, Point to, Stroke stroke);
 
    /**
     * Draws a laid-out run of text, its top left corner at the origin.
@@ -1047,7 +1178,15 @@ version (unittest)
             * than cast an interface.  A gradient test reads `paint`.
             */
             Color  color;
-            float  strokeWidth = 0;
+
+           /**
+            * The stroke, as it was passed, for the four drawing kinds; the
+            * default one for the fills, which are not stroked at all.
+            *
+            * Its thickness is a length in the space that was in effect, and
+            * scaling it is the backend's business rather than this record's.
+            */
+            Stroke stroke;
             Matrix transform;
 
            /**
@@ -1075,47 +1214,46 @@ version (unittest)
         void clear(Color color)
         {
             entries ~= Entry(Kind.clear, Rect.init, Point.init, Point.init,
-                             color, 0, _transforms.current);
+                             color, Stroke.init, _transforms.current);
         }
 
         void fillRectangle(Rect rect, Paint paint)
         {
-            record(Kind.fillRectangle, rect, paint, 0);
+            record(Kind.fillRectangle, rect, paint, Stroke.init);
         }
 
-        void drawRectangle(Rect rect, Paint paint, float strokeWidth = 1)
+        void drawRectangle(Rect rect, Stroke stroke)
         {
-            record(Kind.drawRectangle, rect, paint, strokeWidth);
+            record(Kind.drawRectangle, rect, stroke.paint, stroke);
         }
 
         void fillRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint)
         {
-            record(Kind.fillRoundedRectangle, rect, paint, 0, radiusX, radiusY);
+            record(Kind.fillRoundedRectangle, rect, paint, Stroke.init, radiusX, radiusY);
         }
 
-        void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Paint paint,
-                                  float strokeWidth = 1)
+        void drawRoundedRectangle(Rect rect, float radiusX, float radiusY, Stroke stroke)
         {
-            record(Kind.drawRoundedRectangle, rect, paint, strokeWidth, radiusX, radiusY);
+            record(Kind.drawRoundedRectangle, rect, stroke.paint, stroke, radiusX, radiusY);
         }
 
         void fillEllipse(Rect bounds, Paint paint)
         {
-            record(Kind.fillEllipse, bounds, paint, 0);
+            record(Kind.fillEllipse, bounds, paint, Stroke.init);
         }
 
-        void drawEllipse(Rect bounds, Paint paint, float strokeWidth = 1)
+        void drawEllipse(Rect bounds, Stroke stroke)
         {
-            record(Kind.drawEllipse, bounds, paint, strokeWidth);
+            record(Kind.drawEllipse, bounds, stroke.paint, stroke);
         }
 
-        void drawLine(Point from, Point to, Paint paint, float strokeWidth = 1)
+        void drawLine(Point from, Point to, Stroke stroke)
         {
             entries ~= Entry(Kind.line, Rect.init,
                              _transforms.current.transform(from),
                              _transforms.current.transform(to),
-                             resolveColor(paint), strokeWidth, _transforms.current,
-                             null, paint);
+                             resolveColor(stroke.paint), stroke, _transforms.current,
+                             null, stroke.paint);
         }
 
        /*
@@ -1129,7 +1267,7 @@ version (unittest)
             immutable box = Rect(origin.x, origin.y, layout.size.width, layout.size.height);
 
             entries ~= Entry(Kind.text, mapBounds(_transforms.current, box),
-                             Point.init, Point.init, resolveColor(paint), 0,
+                             Point.init, Point.init, resolveColor(paint), Stroke.init,
                              _transforms.current, layout.text, paint);
         }
 
@@ -1141,11 +1279,11 @@ version (unittest)
         @property size_t depth() { return _transforms.depth; }
 
     private:
-        void record(Kind kind, Rect rect, Paint paint, float strokeWidth,
+        void record(Kind kind, Rect rect, Paint paint, Stroke stroke,
                     float radiusX = 0, float radiusY = 0)
         {
             entries ~= Entry(kind, mapBounds(_transforms.current, rect),
-                             Point.init, Point.init, resolveColor(paint), strokeWidth,
+                             Point.init, Point.init, resolveColor(paint), stroke,
                              _transforms.current, null, paint, radiusX, radiusY);
         }
 
@@ -1355,19 +1493,45 @@ unittest
 
     context.pushTransform(Matrix.translation(10, 20));
     context.fillRoundedRectangle(Rect(0, 0, 100, 40), 6, 4, ink);
-    context.drawRoundedRectangle(Rect(0, 0, 100, 40), 6, 6, ink, 2);
+    context.drawRoundedRectangle(Rect(0, 0, 100, 40), 6, 6, Stroke(ink, 2));
     context.popTransform();
 
     assert(context.entries[0].kind == RecordingContext.Kind.fillRoundedRectangle);
     assert(context.entries[0].rect == Rect(10, 20, 100, 40));
     assert(context.entries[0].radiusX == 6 && context.entries[0].radiusY == 4,
            "two radii, because that is the shape a backend draws");
-    assert(context.entries[0].strokeWidth == 0);
+    assert(context.entries[0].stroke == Stroke.init, "a fill is not stroked at all");
 
     assert(context.entries[1].kind == RecordingContext.Kind.drawRoundedRectangle);
-    assert(context.entries[1].strokeWidth == 2);
+    assert(context.entries[1].stroke.thickness == 2);
 
     // And the plain kinds carry no radii, so a test cannot read one by accident.
     context.fillRectangle(Rect(0, 0, 10, 10), ink);
     assert(context.entries[2].radiusX == 0 && context.entries[2].radiusY == 0);
+}
+
+unittest
+{
+    // A stroke reaches the context as it was handed over, shape and all -- so a
+    // test of something that draws a dotted line can say so, and a backend that
+    // drops the shape has somewhere to be caught.
+    auto ink = new FakeSolidPaint(Color.black);
+    auto context = new RecordingContext;
+
+    auto dotted = Stroke(ink, 2);
+    dotted.dashStyle = DashStyle.dot;
+    dotted.startCap = LineCap.round;
+    dotted.endCap = LineCap.round;
+
+    context.drawLine(Point(0, 0), Point(50, 0), dotted);
+    context.drawRectangle(Rect(0, 0, 10, 10), Stroke(ink));
+    context.drawEllipse(Rect(0, 0, 10, 10), dotted);
+
+    assert(context.entries[0].stroke == dotted);
+    assert(context.entries[0].paint is ink, "and the paint is reachable where it always was");
+
+    assert(context.entries[1].stroke.thickness == 1, "the width nobody chose");
+    assert(context.entries[1].stroke.hasPlainShape);
+
+    assert(context.entries[2].stroke.dashStyle == DashStyle.dot);
 }

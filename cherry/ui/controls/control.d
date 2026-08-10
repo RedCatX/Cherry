@@ -9,7 +9,7 @@ module cherry.ui.controls.control;
 import cherry.core.property;
 import cherry.core.rtti;
 import cherry.core.value;
-import cherry.platform.render : DrawingContext, Rect, Size, Thickness;
+import cherry.platform.render : DrawingContext, Rect, Size, Stroke, Thickness;
 import cherry.ui.element;
 import cherry.ui.media.brush : Brush;
 
@@ -256,8 +256,8 @@ protected:
                 context.fillRectangle(bounds, fill);
         }
 
-        auto stroke = borderBrush;
-        if (stroke is null)
+        auto edge = borderBrush;
+        if (edge is null)
             return;
 
         immutable border = borderThickness;
@@ -277,11 +277,11 @@ protected:
             if (radius > 0)
             {
                 immutable inner = atLeastZero(radius - half);
-                context.drawRoundedRectangle(line, inner, inner, stroke, width);
+                context.drawRoundedRectangle(line, inner, inner, Stroke(edge, width));
             }
             else
             {
-                context.drawRectangle(line, stroke, width);
+                context.drawRectangle(line, Stroke(edge, width));
             }
 
             return;
@@ -292,15 +292,15 @@ protected:
         immutable middle = atLeastZero(bounds.height - border.top - border.bottom);
 
         if (border.top > 0)
-            context.fillRectangle(Rect(0, 0, bounds.width, border.top), stroke);
+            context.fillRectangle(Rect(0, 0, bounds.width, border.top), edge);
         if (border.bottom > 0)
             context.fillRectangle(Rect(0, bounds.height - border.bottom,
-                                       bounds.width, border.bottom), stroke);
+                                       bounds.width, border.bottom), edge);
         if (border.left > 0)
-            context.fillRectangle(Rect(0, border.top, border.left, middle), stroke);
+            context.fillRectangle(Rect(0, border.top, border.left, middle), edge);
         if (border.right > 0)
             context.fillRectangle(Rect(bounds.width - border.right, border.top,
-                                       border.right, middle), stroke);
+                                       border.right, middle), edge);
     }
 
 private:
@@ -425,7 +425,7 @@ unittest
 
     auto entry = context.entries[0];
     assert(entry.kind == RecordingContext.Kind.drawRectangle);
-    assert(entry.strokeWidth == 4);
+    assert(entry.stroke.thickness == 4);
     assert(entry.rect == Rect(2, 2, 96, 46), "in by half, so the stroke ends at the edge");
 
     // With a radius it is the rounded stroke instead, and the radius follows
