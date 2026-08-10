@@ -522,6 +522,105 @@ private:
         return focus !is null ? focus : this;
     }
 
+protected:
+   /**
+    * Tab and Shift+Tab walk the focus, and the window is where they land.
+    *
+    * Here rather than on each control because the walk is over the whole tree
+    * and no control can see one: a key bubbles from the focused element up, so
+    * anything that did not claim Tab leaves it to arrive here.  A control that
+    * wants Tab for itself -- a grid moving between cells, an editor inserting
+    * one -- claims it on the way and this never sees it.
+    */
+    override void handleKeyDown(RoutedEventArgs args)
+    {
+        super.handleKeyDown(args);
+
+        auto pressed = cast(KeyEventArgs) args;
+        if (pressed is null || pressed.key != Key.tab)
+            return;
+
+        if (moveFocus((pressed.modifiers & ModifierKeys.shift) != 0))
+            args.handled = true;
+    }
+
+private:
+   /*
+    * Moves the keyboard to the next or previous place it can go, wrapping at
+    * the ends.
+    *
+    * Document order, which is the order the elements were put into the tree --
+    * what a reader sees walking the markup, and what everyone expects Tab to
+    * follow.  WPF's TabIndex, which lets that order be overridden, is not here;
+    * neither are its navigation modes, which decide where a walk is allowed to
+    * leave a container.  Both need the walk to exist first.
+    *
+    * With nothing focused, Tab starts at the first stop and Shift+Tab at the
+    * last, so the first press always lands somewhere sensible.
+    */
+    bool moveFocus(bool backwards)
+    {
+        Element[] stops;
+        collectTabStops(this, stops);
+
+        if (stops.length == 0)
+            return false;
+
+        auto current = currentFocus;
+
+        ptrdiff_t index = -1;
+        foreach (i, stop; stops)
+        {
+            if (stop is current)
+            {
+                index = i;
+                break;
+            }
+        }
+
+        immutable count = cast(ptrdiff_t) stops.length;
+
+        ptrdiff_t next;
+        if (index < 0)
+            next = backwards ? count - 1 : 0;
+        else
+            next = (index + (backwards ? -1 : 1) + count) % count;
+
+        return stops[next].focus();
+    }
+
+   /*
+    * Every element the walk may stop on, in document order.
+    *
+    * Written as its own walk rather than a filter over `descendants` because it
+    * has to **prune**: an element that is not there for input takes its
+    * children with it, and a flat filter would keep offering them.
+    *
+    * IsHitTestVisible is that flag, which is a stretch -- it is named for the
+    * mouse -- but it is the only one the framework has, it already means "this
+    * layer is not there for input" and it already takes its subtree with it.
+    * When there is a Visibility and an IsEnabled, this reads all three.
+    */
+    static void collectTabStops(Element parent, ref Element[] stops)
+    {
+        auto view = parent.children;
+
+        foreach (i; 0 .. view.length)
+        {
+            auto child = view[i];
+
+            if (!child.isHitTestVisible)
+                continue;
+
+            if (child.focusable && child.isTabStop)
+                stops ~= child;
+
+            collectTabStops(child, stops);
+        }
+    }
+
+private:
+
    /**
     * Takes the pointer for an element in this window's tree.
     *
@@ -1825,4 +1924,119 @@ unittest
     w.platform.host.onFocusChanged(true);
 
     assert(w.window.focusedElement is null);
+}
+
+unittest
+{
+    // Tab walks in document order and wraps; Shift+Tab walks back.
+    auto w = makeWindow();
+
+    auto panel = new Element;
+    auto first = new Element;
+    auto second = new Element;
+    auto third = new Element;
+
+    // Nested, to show the order is the tree's and not the child list of any
+    // one element: panel comes before what is inside it.
+    w.window.addChild(panel);
+    panel.addChild(first);
+    panel.addChild(second);
+    w.window.addChild(third);
+
+    foreach (e; [first, second, third])
+        e.focusable = true;
+
+    assert(w.window.focusedElement is null);
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false);
+    assert(w.window.focusedElement is first, "the first press lands on the first stop");
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false);
+    assert(w.window.focusedElement is second);
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false);
+    assert(w.window.focusedElement is third, "out of the panel and on to what follows it");
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false);
+    assert(w.window.focusedElement is first, "and round again");
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.shift, false);
+    assert(w.window.focusedElement is third, "backwards wraps the other way");
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.shift, false);
+    assert(w.window.focusedElement is second);
+
+    // The window claims the key, so it does not reach the platform.
+    assert(w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false));
+}
+
+unittest
+{
+    // What the walk skips: something that cannot take the keyboard, something
+    // that can but asked to be left out, and a whole layer that is not there
+    // for input -- children and all.
+    auto w = makeWindow();
+
+    auto structure = new Element;              // not focusable
+    auto skipped = new Element;                // focusable, not a tab stop
+    auto hidden = new Element;                 // a layer out of the way
+    auto insideHidden = new Element;
+    auto reachable = new Element;
+
+    w.window.addChild(structure);
+    w.window.addChild(skipped);
+    w.window.addChild(hidden);
+    hidden.addChild(insideHidden);
+    w.window.addChild(reachable);
+
+    skipped.focusable = true;
+    skipped.isTabStop = false;
+
+    hidden.focusable = true;
+    hidden.isHitTestVisible = false;
+    insideHidden.focusable = true;
+
+    reachable.focusable = true;
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false);
+    assert(w.window.focusedElement is reachable, "the only stop there is");
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false);
+    assert(w.window.focusedElement is reachable, "and it stays there");
+
+    // A layer out of the way takes its children with it -- that is what makes
+    // it a layer and not a flag on one element.
+    assert(!insideHidden.isFocused);
+}
+
+unittest
+{
+    // With nowhere to go, Tab is left alone -- so a window with no focusable
+    // element still passes the key on rather than swallowing it.
+    auto w = makeWindow();
+    w.window.addChild(new Element);
+
+    assert(!w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false));
+    assert(w.window.focusedElement is null);
+}
+
+unittest
+{
+    // A control that wants Tab for itself claims it on the way up, and the
+    // window never gets to move the focus.
+    auto w = makeWindow();
+
+    auto first = new Element;
+    auto second = new Element;
+    first.focusable = true;
+    second.focusable = true;
+    w.window.addChild(first);
+    w.window.addChild(second);
+
+    first.focus();
+    first.onKeyDown ~= (Element sender, RoutedEventArgs args) { args.handled = true; };
+
+    w.platform.host.onKeyDown(Key.tab, ModifierKeys.none, false);
+
+    assert(w.window.focusedElement is first, "claimed before it ever reached the window");
 }
