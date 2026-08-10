@@ -640,6 +640,13 @@ private:
     {
         DefinitionBase[] definitions;
         float[]          sizes;
+       /*
+        * Which tracks the division below has finished with -- either because
+        * they never took a share, or because they ran into a bound and were
+        * fixed at it.  Kept beside the sizes rather than worked out again on
+        * every pass, which is what lets the division be a plain loop.
+        */
+        bool[]           settled;
 
        /*
         * How many tracks there really are.  A grid with no definitions has one
@@ -711,27 +718,30 @@ private:
 
     Axis columnAxis()
     {
-        ensureSizes(_columnSizes, _columns.length);
-        return Axis(_columns, _columnSizes);
+        ensureTracks(_columnSizes, _columnSettled, _columns.length);
+        return Axis(_columns, _columnSizes, _columnSettled);
     }
 
     Axis rowAxis()
     {
-        ensureSizes(_rowSizes, _rows.length);
-        return Axis(_rows, _rowSizes);
+        ensureTracks(_rowSizes, _rowSettled, _rows.length);
+        return Axis(_rows, _rowSizes, _rowSettled);
     }
 
    /*
-    * Keeps the resolved sizes as long as the definitions, with room for the
+    * Keeps the working arrays as long as the definitions, with room for the
     * implicit track when there are none.  Reused between passes rather than
     * allocated per pass: layout runs on every frame that changes anything.
     */
-    static void ensureSizes(ref float[] sizes, size_t definitions)
+    static void ensureTracks(ref float[] sizes, ref bool[] settled, size_t definitions)
     {
         immutable wanted = definitions ? definitions : 1;
 
         if (sizes.length != wanted)
             sizes.length = wanted;
+
+        if (settled.length != wanted)
+            settled.length = wanted;
     }
 
    /*
@@ -793,7 +803,14 @@ private:
 
    /*
     * Divides what the fixed and content-sized tracks left over among the stars,
-    * in proportion to their weights.
+    * in proportion to their weights and inside their bounds.
+    *
+    * The bounds are what make this a loop rather than one division.  A track
+    * whose share falls outside them cannot take that share; it is fixed at the
+    * bound it hit, leaves the division, and what it did not take is divided
+    * again among the tracks still free -- which may push another one into a
+    * bound, and so on.  Each pass either settles everything or removes at least
+    * one track, so it cannot run more times than there are tracks.
     *
     * Nothing to do when the offer is unbounded: those tracks were sized by
     * their content in the pass above, and there is no remainder of infinity.
@@ -803,39 +820,67 @@ private:
         if (!(available < float.infinity))
             return;
 
-        float weight = 0;
         float taken = 0;
 
         foreach (i; 0 .. axis.count)
         {
-            if (axis.sharesRemainder(i, available))
-                weight += axis.lengthAt(i).value;
-            else
+            axis.settled[i] = !axis.sharesRemainder(i, available);
+
+            if (axis.settled[i])
                 taken += axis.sizes[i];
+            else
+                axis.sizes[i] = axis.minAt(i);   // a floor to fall back to
         }
 
-        if (!(weight > 0))
+        float remaining = available - taken;
+        if (!(remaining > 0))
+            remaining = 0;
+
+        for (;;)
         {
-            // Every star has a weight of zero, which is a way of saying they
-            // want nothing.  They keep their minimums.
+            float weight = 0;
+
             foreach (i; 0 .. axis.count)
             {
-                if (axis.sharesRemainder(i, available))
-                    axis.sizes[i] = axis.minAt(i);
+                if (!axis.settled[i])
+                    weight += axis.lengthAt(i).value;
             }
 
-            return;
-        }
+            // Nothing left that wants a share: what is unsettled asked for a
+            // weight of zero, which is a way of saying it wants nothing, and it
+            // keeps the minimum it was given above.
+            if (!(weight > 0))
+                return;
 
-        immutable remaining = available - taken > 0 ? available - taken : 0;
+            bool hitABound = false;
 
-        foreach (i; 0 .. axis.count)
-        {
-            if (!axis.sharesRemainder(i, available))
-                continue;
+            foreach (i; 0 .. axis.count)
+            {
+                if (axis.settled[i])
+                    continue;
 
-            immutable share = remaining * axis.lengthAt(i).value / weight;
-            axis.sizes[i] = clampLength(share, axis.minAt(i), axis.maxAt(i));
+                immutable share = remaining * axis.lengthAt(i).value / weight;
+                immutable held = clampLength(share, axis.minAt(i), axis.maxAt(i));
+
+                axis.sizes[i] = held;
+
+                if (held != share)
+                {
+                    axis.settled[i] = true;
+                    remaining -= held;
+
+                    if (!(remaining > 0))
+                        remaining = 0;
+
+                    hitABound = true;
+                }
+            }
+
+            // The shares the pass just handed out are only final if nobody was
+            // pushed into a bound; otherwise there is less to go round and the
+            // ones still free are divided again.
+            if (!hitABound)
+                return;
         }
     }
 
@@ -897,6 +942,8 @@ private:
     DefinitionBase[] _columns;
     float[]          _rowSizes;
     float[]          _columnSizes;
+    bool[]           _rowSettled;
+    bool[]           _columnSettled;
 }
 
 /*
@@ -1315,4 +1362,105 @@ unittest
     grid.clearColumns();
     assert(grid.columnCount == 0);
     assert(column.logicalParent is null, "and it is let go when the grid drops it");
+}
+
+unittest
+{
+    // A star that would be given more than its maximum takes the maximum, and
+    // what it left is divided again among the rest -- which is the whole reason
+    // the division is a loop.
+    auto grid = new Grid;
+    auto capped = grid.addColumn(GridLength.star(1));
+    grid.addColumn(GridLength.star(1));
+
+    capped.maxWidth = 50;
+
+    cell(grid, new Filler, 0, 0);
+    cell(grid, new Filler, 1, 0);
+
+    layOut(grid, Size(400, 50));
+
+    assert(capped.actualWidth == 50, "it could not take its two hundred");
+    assert(grid.column(1).actualWidth == 350, "and the other one took what was left over");
+}
+
+unittest
+{
+    // The same the other way: a minimum lifts a track above its share, and the
+    // rest divide what remains.
+    auto grid = new Grid;
+    auto floored = grid.addColumn(GridLength.star(1));
+    grid.addColumn(GridLength.star(3));
+
+    floored.minWidth = 200;
+
+    cell(grid, new Filler, 0, 0);
+    cell(grid, new Filler, 1, 0);
+
+    layOut(grid, Size(400, 50));
+
+    assert(floored.actualWidth == 200, "a hundred was its share, and two hundred is its floor");
+    assert(grid.column(1).actualWidth == 200);
+}
+
+unittest
+{
+    // Two bounds at once, so the division has to go round more than twice.
+    auto grid = new Grid;
+    auto first = grid.addColumn(GridLength.star(1));
+    auto second = grid.addColumn(GridLength.star(1));
+    grid.addColumn(GridLength.star(1));
+
+    first.maxWidth = 20;
+    second.maxWidth = 40;
+
+    foreach (i; 0 .. 3)
+        cell(grid, new Filler, cast(int) i, 0);
+
+    layOut(grid, Size(300, 50));
+
+    assert(first.actualWidth == 20);
+    assert(second.actualWidth == 40);
+    assert(grid.column(2).actualWidth == 240, "everything the other two could not take");
+}
+
+unittest
+{
+    // The bounds hold every kind of track, not only the stars.
+    auto grid = new Grid;
+    auto fixed = grid.addColumn(GridLength(500));
+    auto content = grid.addColumn(GridLength.autoSize);
+
+    fixed.maxWidth = 100;
+    content.minWidth = 80;
+
+    cell(grid, new Filler, 0, 0);
+    cell(grid, new Box(30, 10), 1, 0);
+
+    layOut(grid, Size(1000, 50));
+
+    assert(fixed.actualWidth == 100, "a pixel track is held to its maximum too");
+    assert(content.actualWidth == 80, "and an auto track cannot shrink below its minimum");
+}
+
+unittest
+{
+    // Minimums that between them want more than there is take what there is and
+    // leave nothing, rather than going negative.
+    auto grid = new Grid;
+    auto first = grid.addColumn(GridLength.star(1));
+    auto second = grid.addColumn(GridLength.star(1));
+
+    first.minWidth = 300;
+    second.minWidth = 300;
+
+    cell(grid, new Filler, 0, 0);
+    cell(grid, new Filler, 1, 0);
+
+    layOut(grid, Size(400, 50));
+
+    assert(first.actualWidth == 300);
+    assert(second.actualWidth == 300, "both floors hold, and the grid overflows");
+    assert(grid.desiredSize.width == 400, "which the grid reports only as far as it was offered");
+    assert(grid.unclippedDesiredSize.width == 600, "the truth is still on the record");
 }
