@@ -168,13 +168,28 @@ void main()
     auto window = new HelloWindow;
     window.setValue(Window.titleProperty, Value("Hello from Cherry!"));
 
+    // The window is one cell, so anything with more than one thing in it needs
+    // something that divides.  Two columns and two rows: the stripes take the
+    // width they need, the drawing takes everything left over, and the line
+    // along the bottom takes the height it needs across both.
+    //
+    // What a stack could not do is the middle of that.  A stack hands each
+    // child the length it asked for; nothing in it ever gets "the rest".
+    auto layout = new Grid;
+    layout.addColumn(GridLength.autoSize);
+    layout.addColumn(GridLength.star(1));
+    layout.addRow(GridLength.star(1));
+    layout.addRow(GridLength.autoSize);
+    layout.rowSpacing = 12;
+
+    window.addChild(layout);
+
     // A column down the left, laid out by the framework rather than by hand:
-    // the panel is 160 wide and pinned to the left, its children have a height
-    // each and no opinion about width, and the gaps between them come half
-    // from the panel's spacing and half from one child's own margin.
+    // the panel is 160 wide, its children have a height each and no opinion
+    // about width, and the gaps between them come half from the panel's spacing
+    // and half from one child's own margin.
     auto stripes = new StackPanel;
     stripes.width = 160;
-    stripes.horizontalAlignment = HorizontalAlignment.left;
     stripes.verticalAlignment = VerticalAlignment.top;
     stripes.spacing = 6;
 
@@ -236,18 +251,23 @@ void main()
         window.close();
     };
 
-    window.addChild(stripes);
+    // Top left, in the column that is as wide as its content.  Nothing here
+    // says 160 twice: the column asked the panel how wide it wanted to be.
+    Grid.setColumn(stripes, 0);
+    Grid.setRow(stripes, 0);
+    layout.addChild(stripes);
 
-    // A second child of the window, pinned along the bottom.  The window is a
-    // single-cell container, so both children are offered the whole client
-    // area and each takes the part of it its alignment asks for.
+    // Along the bottom and across both columns, in the row that is as tall as
+    // the text in it -- so the line sits where it sits because of what it is,
+    // not because somebody measured the window and left a margin.
     auto footer = new TextBlock;
     footer.text = sample;
     footer.horizontalAlignment = HorizontalAlignment.center;
-    footer.verticalAlignment = VerticalAlignment.bottom;
     footer.margin = Thickness(0, 0, 0, 12);
 
-    window.addChild(footer);
+    Grid.setRow(footer, 1);
+    Grid.setColumnSpan(footer, 2);
+    layout.addChild(footer);
 
     // Everything a band or the button did not claim arrives here on the way up,
     // with args naming whatever was actually under the pointer.
