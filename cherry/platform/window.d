@@ -165,6 +165,49 @@ interface PlatformWindowHost
     * then no worse off than it would be with no notification at all.
     */
     void onMouseLeave();
+
+   /**
+    * A key went down or came back up.  Returning true says the host dealt with
+    * it and the platform should leave it alone.
+    *
+    * The answer is not politeness.  Some keys mean something to the window
+    * manager as well as to the application -- Alt+F4 closes, F10 reaches for
+    * the menu -- and a backend that swallowed every key would take those away
+    * from the user.  So a backend passes on what the host did not claim, and
+    * this return value is the shape of the claim.  A host with nothing to say
+    * returns false.
+    *
+    * isRepeat marks the ones the auto-repeat produced rather than the user.
+    */
+    bool onKeyDown(Key key, ModifierKeys modifiers, bool isRepeat);
+
+    /// ditto
+    bool onKeyUp(Key key, ModifierKeys modifiers);
+
+   /**
+    * Text was typed -- the result of the keys, the layout, the modifiers and
+    * any dead keys, rather than the keys themselves.
+    *
+    * This and onKeyDown answer different questions and neither substitutes for
+    * the other: a shortcut is Ctrl+S wherever S happens to sit, and a character
+    * is whatever the keyboard produced, which may take several keys to type and
+    * may come from no key at all when an input method is in the way.
+    *
+    * The string is whole.  A backend receiving text a fragment at a time -- as
+    * Windows does, one UTF-16 code unit per message -- puts the pieces together
+    * before calling this, so a host never sees half a character.
+    */
+    void onTextInput(string text);
+
+   /**
+    * This window gained or lost the keyboard.
+    *
+    * Not onActivationChanged, which is about the application as a whole: this
+    * is about which window of it the typing goes to.  A host uses it to stop
+    * showing a focused element as focused, since a window that is not taking
+    * keys has nothing focused in any sense the user can act on.
+    */
+    void onFocusChanged(bool focused);
 }
 
 /**

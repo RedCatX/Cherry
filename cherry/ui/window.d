@@ -314,6 +314,83 @@ private:
         {
             this.outer.platformMouseCaptureLost();
         }
+
+        bool onKeyDown(Key key, ModifierKeys modifiers, bool isRepeat)
+        {
+            return this.outer.platformKeyDown(key, modifiers, isRepeat);
+        }
+
+        bool onKeyUp(Key key, ModifierKeys modifiers)
+        {
+            return this.outer.platformKeyUp(key, modifiers);
+        }
+
+        void onTextInput(string text)
+        {
+            this.outer.platformTextInput(text);
+        }
+
+        void onFocusChanged(bool focused)
+        {
+            this.outer.platformFocusChanged(focused);
+        }
+    }
+
+   /**
+    * Gives the keyboard to an element of this window's tree.
+    *
+    * One element at a time, which is what makes the focus a field rather than a
+    * set: there is one keyboard.  The element that had it is told first and the
+    * new one second, so a handler on either finds the state already settled --
+    * the same ordering the hover chains use.
+    *
+    * Refused for an element that is not focusable, and for one that is not in
+    * this window: focus is a window's to give, and an element that has left the
+    * tree has left the window that would have given it.
+    */
+    public override bool focusAsRoot(Element target)
+    {
+        if (_destroyed || target is null || !target.focusable || target.root !is this)
+            return false;
+
+        if (currentFocus is target)
+            return true;
+
+        dropFocus();
+
+        _focused = target;
+        target.setFocused(true);
+        target.raiseEvent(new RoutedEventArgs(gotFocusEvent));
+
+        return true;
+    }
+
+   /**
+    * Takes it back, but only from the element that has it.
+    *
+    * Same guard as releasing a capture, and for the same reason: an element
+    * giving up something it never had would otherwise pull the keyboard out
+    * from under whoever really has it.
+    */
+    public override void clearFocusAsRoot(Element target)
+    {
+        if (target is null || currentFocus !is target)
+            return;
+
+        dropFocus();
+    }
+
+   /**
+    * The element the typing goes to, or null.
+    *
+    * Checked rather than merely remembered: an element taken out of the tree is
+    * no longer in this window, and nothing tells the window when that happens.
+    * Asking `root is this` costs a walk up the parents and settles it without
+    * every removeChild having to search its subtree for the focused element.
+    */
+    @property Element focusedElement()
+    {
+        return currentFocus;
     }
 
    /*
@@ -323,6 +400,126 @@ private:
     void platformMouseCaptureLost()
     {
         endCapture();
+    }
+
+   /*
+    * The focused element, or null -- including when the one being remembered
+    * has since left the tree.
+    *
+    * The lazy half of keeping focus honest.  Nothing tells a window that an
+    * element was detached, and making every detach look for the focused
+    * element would put a subtree walk on a common operation to serve a rare
+    * one.  So the question is asked here instead, where it is cheap: an
+    * element's root is a walk up its parents, and an element out of the tree
+    * roots somewhere that is not this window.
+    */
+    @property Element currentFocus()
+    {
+        if (_focused is null)
+            return null;
+
+        if (_focused.root is this)
+            return _focused;
+
+        // Noticed rather than merely reported: leaving the flag set would let
+        // a detached element go on claiming the keyboard for good.
+        _focused.setFocused(false);
+        _focused = null;
+
+        return null;
+    }
+
+   /*
+    * Takes the keyboard off whoever has it, telling them, and leaves it
+    * nowhere.
+    *
+    * Forgets first and tells second -- the same order endCapture uses, and for
+    * the same reason: a handler that asks for the focus back from inside its
+    * own LostFocus is then asking for something nobody holds, rather than
+    * fighting a field that still names it.
+    */
+    void dropFocus()
+    {
+        auto was = currentFocus;
+        _focused = null;
+
+        if (was is null)
+            return;
+
+        was.setFocused(false);
+        was.raiseEvent(new RoutedEventArgs(lostFocusEvent));
+    }
+
+   /*
+    * A key, on its way to whoever has the keyboard.
+    *
+    * The focused element is to the keyboard what the hit element is to the
+    * mouse, and with nothing focused the window itself is the target -- so a
+    * shortcut handler on the window hears every key whether or not anything
+    * inside has the focus.
+    *
+    * The answer travels back to the platform: what nothing handled is left for
+    * Windows, which is what keeps Alt+F4 and F10 working.
+    */
+    bool platformKeyDown(Key key, ModifierKeys modifiers, bool isRepeat)
+    {
+        auto args = new KeyEventArgs(keyDownEvent, key, modifiers, isRepeat);
+        keyTarget.raiseEvent(args);
+        return args.handled;
+    }
+
+    /// ditto
+    bool platformKeyUp(Key key, ModifierKeys modifiers)
+    {
+        auto args = new KeyEventArgs(keyUpEvent, key, modifiers);
+        keyTarget.raiseEvent(args);
+        return args.handled;
+    }
+
+    /// ditto
+    void platformTextInput(string text)
+    {
+        keyTarget.raiseEvent(new TextInputEventArgs(textInputEvent, text));
+    }
+
+   /*
+    * The window stopped being the one the typing goes to, or started again.
+    *
+    * The focused element is put aside rather than forgotten, and given the
+    * keyboard back when the window has it again -- which is what makes coming
+    * back from another application land where the user left off.  While the
+    * window is away nothing in it is focused, so nothing in it draws itself as
+    * focused: a focus ring glowing in a background window is a lie about where
+    * the next keystroke will go.
+    */
+    void platformFocusChanged(bool focused)
+    {
+        if (focused)
+        {
+            if (_focusOnReturn !is null)
+            {
+                focusAsRoot(_focusOnReturn);
+                _focusOnReturn = null;
+            }
+
+            return;
+        }
+
+        _focusOnReturn = currentFocus;
+        dropFocus();
+    }
+
+   /*
+    * Who a key event is for: whoever has the keyboard, or this window.
+    *
+    * The window rather than nothing, so that a route always exists -- an
+    * application with no focusable element at all still gets its keys, at the
+    * one place that is certain to be there.
+    */
+    Element keyTarget()
+    {
+        auto focus = currentFocus;
+        return focus !is null ? focus : this;
     }
 
    /**
@@ -646,6 +843,12 @@ private:
     // position, the pointer being elsewhere by then -- has one to report.
     float          _lastMouseX = 0;
     float          _lastMouseY = 0;
+    // Whoever the typing goes to.  Read through currentFocus and never
+    // directly: this one may still name an element that has left the tree.
+    Element        _focused;
+    // Where the keyboard was when the window lost it, so that coming back from
+    // another application lands where the user left off.
+    Element        _focusOnReturn;
     Multicast!(void delegate(Window)) _onClosed;
     Multicast!WindowClosingHandler _onClosing;
     bool _syncingFromPlatform;
@@ -1447,4 +1650,179 @@ unittest
     auto ctx = new RecordingContext;
     w.window.renderSubtree(ctx);
     assert(ctx.entries[0].rect == Rect(-400, 0, 1000, 400));
+}
+
+unittest
+{
+    // The keyboard goes to one element of the window, and the window is what
+    // decides -- element.d only asks.
+    auto w = makeWindow();
+
+    auto field = new Element;
+    auto other = new Element;
+    field.focusable = true;
+    other.focusable = true;
+    w.window.addChild(field);
+    w.window.addChild(other);
+
+    string[] log;
+    field.onGotFocus ~= (Element sender, RoutedEventArgs args) { log ~= "field:got"; };
+    field.onLostFocus ~= (Element sender, RoutedEventArgs args) { log ~= "field:lost"; };
+    other.onGotFocus ~= (Element sender, RoutedEventArgs args) { log ~= "other:got"; };
+
+    assert(field.focus());
+    assert(field.isFocused && w.window.focusedElement is field);
+    assert(log == ["field:got"]);
+
+    // Asking again is granted and says nothing: the state asked for already
+    // holds, and nothing changed to report.
+    log = null;
+    assert(field.focus());
+    assert(log.length == 0);
+
+    // Moving it tells the one losing it before the one taking it, so either
+    // handler finds the state already settled.
+    assert(other.focus());
+    assert(log == ["field:lost", "other:got"]);
+    assert(!field.isFocused && other.isFocused);
+
+    // Nothing that cannot take the keyboard takes it away either.
+    auto structure = new Element;
+    w.window.addChild(structure);
+    assert(!structure.focus());
+    assert(other.isFocused, "a refused request changes nothing");
+
+    other.unfocus();
+    assert(w.window.focusedElement is null);
+    assert(!other.isFocused);
+}
+
+unittest
+{
+    // A key travels from the focused element up, the way a click travels from
+    // the element that was hit -- so a handler on the window hears it with
+    // args.source naming where it started.
+    auto w = makeWindow();
+
+    auto panel = new Element;
+    auto field = new Element;
+    field.focusable = true;
+    panel.addChild(field);
+    w.window.addChild(panel);
+
+    Element source;
+    Key seen;
+    w.window.onKeyDown ~= (Element sender, RoutedEventArgs args) {
+        source = args.source;
+        seen = (cast(KeyEventArgs) args).key;
+    };
+
+    // With nothing focused the window itself is where a key starts: an
+    // application with no focusable element still gets its keys.
+    w.platform.host.onKeyDown(Key.f1, ModifierKeys.none, false);
+    assert(source is w.window && seen == Key.f1);
+
+    field.focus();
+    w.platform.host.onKeyDown(Key.a, ModifierKeys.control, false);
+
+    assert(source is field, "and now it starts where the keyboard is");
+    assert(seen == Key.a);
+
+    // What was typed arrives separately from which key was struck.
+    string typed;
+    field.onTextInput ~= (Element sender, RoutedEventArgs args) {
+        typed = (cast(TextInputEventArgs) args).text;
+    };
+
+    w.platform.host.onTextInput("a");
+    assert(typed == "a");
+}
+
+unittest
+{
+    // The platform is told whether anything took the key, because what nothing
+    // took still belongs to Windows -- that is what keeps Alt+F4 working.
+    auto w = makeWindow();
+
+    auto field = new Element;
+    field.focusable = true;
+    w.window.addChild(field);
+    field.focus();
+
+    assert(!w.platform.host.onKeyDown(Key.f4, ModifierKeys.alt, false),
+           "nobody handled it, so the window manager still gets its turn");
+
+    field.onKeyDown ~= (Element sender, RoutedEventArgs args) { args.handled = true; };
+
+    assert(w.platform.host.onKeyDown(Key.f4, ModifierKeys.alt, false));
+    assert(!w.platform.host.onKeyUp(Key.f4, ModifierKeys.alt), "and up is asked separately");
+}
+
+unittest
+{
+    // An element taken out of the tree stops being focused, without every
+    // detach having to search its subtree for the one that was.
+    auto w = makeWindow();
+
+    auto panel = new Element;
+    auto field = new Element;
+    field.focusable = true;
+    panel.addChild(field);
+    w.window.addChild(panel);
+
+    field.focus();
+    assert(w.window.focusedElement is field);
+
+    // Detached along with its parent, which is the case a check on the element
+    // alone would miss.
+    panel.detach();
+
+    assert(w.window.focusedElement is null, "it is not in this window any more");
+    assert(!field.isFocused, "and it stops claiming to be focused");
+
+    // A key now starts at the window again rather than going nowhere.
+    Element source;
+    w.window.onKeyDown ~= (Element sender, RoutedEventArgs args) { source = args.source; };
+    w.platform.host.onKeyDown(Key.b, ModifierKeys.none, false);
+    assert(source is w.window);
+}
+
+unittest
+{
+    // A window that is not the one being typed into has nothing focused, so
+    // nothing in it draws a focus ring -- and coming back lands where the user
+    // left off rather than nowhere.
+    auto w = makeWindow();
+
+    auto field = new Element;
+    field.focusable = true;
+    w.window.addChild(field);
+    field.focus();
+
+    string[] log;
+    field.onGotFocus ~= (Element sender, RoutedEventArgs args) { log ~= "got"; };
+    field.onLostFocus ~= (Element sender, RoutedEventArgs args) { log ~= "lost"; };
+
+    w.platform.host.onFocusChanged(false);
+
+    assert(!field.isFocused);
+    assert(w.window.focusedElement is null);
+    assert(log == ["lost"]);
+
+    w.platform.host.onFocusChanged(true);
+
+    assert(field.isFocused, "back where it was");
+    assert(log == ["lost", "got"]);
+}
+
+unittest
+{
+    // A window with nothing focused loses and regains the keyboard without
+    // inventing a focus for itself on the way back.
+    auto w = makeWindow();
+
+    w.platform.host.onFocusChanged(false);
+    w.platform.host.onFocusChanged(true);
+
+    assert(w.window.focusedElement is null);
 }
