@@ -242,6 +242,13 @@ private:
     * Adapter receiving the platform driver's notifications.  A nested class
     * so the host methods stay out of Window's public API and cannot collide
     * with user-facing names (e.g. the onMouseDown accessor).
+    *
+    * What it forwards to is named platformXxx for the other half of the same
+    * reason: handleMouseMove and its siblings belong to Element, where they
+    * mean "the event reached me" and a control overrides them.  These mean
+    * "the platform said so", which is a different thing at a different layer --
+    * and in D a name reused in a derived class hides the base's, so keeping
+    * both would have quietly put the hooks out of reach of every window.
     */
     final class PlatformHost : PlatformWindowHost
     {
@@ -254,17 +261,17 @@ private:
 
         void onDestroyed()
         {
-            this.outer.handleDestroyed();
+            this.outer.platformDestroyed();
         }
 
         void onResized(int width, int height)
         {
-            this.outer.handleResized(width, height);
+            this.outer.platformResized(width, height);
         }
 
         void onPaintRequested()
         {
-            this.outer.handlePaintRequested();
+            this.outer.platformPaintRequested();
         }
 
         void onActivationChanged(bool active)
@@ -295,17 +302,17 @@ private:
 
         void onMouseMove(int x, int y)
         {
-            this.outer.handleMouseMove(x, y);
+            this.outer.platformMouseMove(x, y);
         }
 
         void onMouseLeave()
         {
-            this.outer.handleMouseLeave();
+            this.outer.platformMouseLeave();
         }
 
         void onMouseCaptureLost()
         {
-            this.outer.handleMouseCaptureLost();
+            this.outer.platformMouseCaptureLost();
         }
     }
 
@@ -313,7 +320,7 @@ private:
     * The platform took the pointer back, so whoever was holding it is told and
     * forgotten.  Nothing is asked of the platform here: it has already done it.
     */
-    void handleMouseCaptureLost()
+    void platformMouseCaptureLost()
     {
         endCapture();
     }
@@ -379,7 +386,7 @@ private:
     * The pointer went somewhere else entirely, so everything it was over is
     * left -- with the position it was last seen at, since there is no new one.
     */
-    void handleMouseLeave()
+    void platformMouseLeave()
     {
         updateMouseOver(_mouseOver, null, _lastMouseX, _lastMouseY);
         _mouseOver = null;
@@ -392,7 +399,7 @@ private:
     * handler reading isMouseOver -- on itself or on anything around it -- reads
     * where the pointer is now rather than where it was a moment ago.
     */
-    void handleMouseMove(int x, int y)
+    void platformMouseMove(int x, int y)
     {
         auto under = hitElement(x, y);
 
@@ -459,11 +466,11 @@ private:
         return this;
     }
 
-    void handleDestroyed()
+    void platformDestroyed()
     {
         _destroyed = true;
         endCapture();
-        handleDisposedRenderer();
+        disposeRenderer();
 
         // Unregister this Window object from UIApplication
         if (_registered)
@@ -485,7 +492,7 @@ private:
                 ~ "To take a window off the screen and bring it back, use hide().");
     }
 
-    void handlePaintRequested()
+    void platformPaintRequested()
     {
         // The renderer is created on the first real paint request: fakes
         // without a native handle (headless tests) never get here.
@@ -503,7 +510,7 @@ private:
         });
     }
 
-    void handleDisposedRenderer()
+    void disposeRenderer()
     {
         if (_renderer !is null)
         {
@@ -512,7 +519,7 @@ private:
         }
     }
 
-    void handleResized(int width, int height)
+    void platformResized(int width, int height)
     {
         if (_renderer !is null)
             _renderer.resize(width, height);
@@ -563,7 +570,7 @@ private:
    /*
     * A window is the one element whose size is dictated from outside the tree,
     * so it is the one for which the last question it was asked is not the best
-    * answer available.  Width and Height are, because handleResized keeps them
+    * answer available.  Width and Height are, because platformResized keeps them
     * truthful about what the platform granted.
     *
     * The margin is added here and taken straight back out by the generic code
@@ -899,7 +906,7 @@ unittest
 unittest
 {
     // A move handler reads the pointer's state as it is now, not as it was --
-    // which is what the ordering inside handleMouseMove buys.
+    // which is what the ordering inside platformMouseMove buys.
     string[] log;
 
     auto w = makeWindow();
