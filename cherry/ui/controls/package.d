@@ -16,5 +16,6 @@ module cherry.ui.controls;
 
 public import cherry.ui.controls.button;
 public import cherry.ui.controls.control;
+public import cherry.ui.controls.grid;
 public import cherry.ui.controls.stackpanel;
 public import cherry.ui.controls.textblock;
