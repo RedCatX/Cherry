@@ -1376,8 +1376,8 @@ protected:
     * there.
     *
     * handleKeyDown is where a key becomes an action.  Note that the auto-repeat
-    * reaches it too, marked as such in the args: a button firing once per press
-    * must look, a text field taking many characters must not.
+    * reaches it too, marked as such in the args -- whether that should count as
+    * another press is the control's judgement and nobody else's.
     *
     * handleTextInput is a different question from handleKeyDown and not a
     * refinement of it -- what was typed, after the layout and the modifiers and

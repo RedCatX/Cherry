@@ -49,8 +49,11 @@ import cherry.ui.input;
  * properties, so both report through onPropertyChanged, which is where a style
  * trigger will hang when there are styles.
  *
- * Not here yet: the keyboard.  Space and Enter do not press it, there is no
- * focus to give it, and IsDefault and IsCancel have nothing to hang off.
+ * **The keyboard works the way Windows does**, which is not the way the mouse
+ * does: Space presses on the way down and clicks on the way up, so it can be
+ * taken back by moving the focus away before letting go; Enter clicks
+ * immediately, and a held Enter clicks again on every repeat, exactly as a
+ * native button and WPF's both do.
  */
 class Button : Control
 {
@@ -206,6 +209,67 @@ protected:
         // switch, a menu, another window.  Without this the button would be
         // left looking pressed with nothing able to release it.
         setPressed(false);
+    }
+
+    override void handleKeyDown(RoutedEventArgs args)
+    {
+        super.handleKeyDown(args);
+
+        auto pressed = cast(KeyEventArgs) args;
+        if (pressed is null)
+            return;
+
+        // Space holds the button down and clicks on the way up, so somebody who
+        // changed their mind can move the focus away before letting go.  That
+        // is the keyboard's version of dragging the pointer off, and it is why
+        // the two keys are not the same key with different names.
+        if (pressed.key == Key.space)
+        {
+            setPressed(true);
+            args.handled = true;
+            return;
+        }
+
+        // Enter acts at once, and again on every repeat while it is held.  Both
+        // a native button and WPF's do this, and it is what makes holding Enter
+        // on a spin button work.
+        if (pressed.key == Key.enter)
+        {
+            args.handled = true;
+            raiseEvent(new RoutedEventArgs(clickEvent));
+        }
+    }
+
+    override void handleKeyUp(RoutedEventArgs args)
+    {
+        super.handleKeyUp(args);
+
+        auto released = cast(KeyEventArgs) args;
+        if (released is null || released.key != Key.space)
+            return;
+
+        immutable clicked = isPressed;
+
+        setPressed(false);
+        args.handled = true;
+
+        if (clicked)
+            raiseEvent(new RoutedEventArgs(clickEvent));
+    }
+
+    override void handleLostFocus(RoutedEventArgs args)
+    {
+        super.handleLostFocus(args);
+
+        // The keyboard's mouseCaptureLost.  A button held down with Space and
+        // then Tabbed away from never sees the key come back up -- that event
+        // goes to whatever has the keyboard now -- so this is the only thing
+        // that can undo the press.
+        //
+        // Unless the pointer is holding it, in which case the press is the
+        // mouse's and the mouse will finish it.
+        if (!isMouseCaptured)
+            setPressed(false);
     }
 
 private:
@@ -501,4 +565,105 @@ unittest
     b.window.platform.host.onMouseUp(MouseButton.left, 50, 20);
 
     assert(heard is b.button);
+}
+
+unittest
+{
+    // Space holds the button and clicks when it comes back up.
+    auto b = bench();
+    b.button.focus();
+
+    int clicks;
+    b.button.onClick ~= (Element sender, RoutedEventArgs args) { ++clicks; };
+
+    b.window.platform.host.onKeyDown(Key.space, ModifierKeys.none, false);
+
+    assert(b.button.isPressed, "held, and looking it");
+    assert(clicks == 0, "a press is not a click");
+
+    // Holding it changes nothing: the press is already on.
+    b.window.platform.host.onKeyDown(Key.space, ModifierKeys.none, true);
+    assert(b.button.isPressed && clicks == 0);
+
+    b.window.platform.host.onKeyUp(Key.space, ModifierKeys.none);
+
+    assert(clicks == 1);
+    assert(!b.button.isPressed);
+}
+
+unittest
+{
+    // Enter acts at once, and again on every repeat -- a native button and
+    // WPF's both do this.
+    auto b = bench();
+    b.button.focus();
+
+    int clicks;
+    b.button.onClick ~= (Element sender, RoutedEventArgs args) { ++clicks; };
+
+    b.window.platform.host.onKeyDown(Key.enter, ModifierKeys.none, false);
+    assert(clicks == 1);
+    assert(!b.button.isPressed, "Enter does not hold it down, it presses it");
+
+    b.window.platform.host.onKeyDown(Key.enter, ModifierKeys.none, true);
+    assert(clicks == 2);
+
+    b.window.platform.host.onKeyUp(Key.enter, ModifierKeys.none);
+    assert(clicks == 2, "and the release adds nothing");
+}
+
+unittest
+{
+    // The keyboard's version of dragging off: Space down, focus away, and
+    // nothing happened.  The button never sees the key come up -- by then the
+    // keyboard is somewhere else -- so losing the focus is what undoes it.
+    auto b = bench();
+
+    auto other = new Button;
+    b.window.window.addChild(other);
+    b.window.window.updateLayout();
+
+    b.button.focus();
+
+    int clicks;
+    b.button.onClick ~= (Element sender, RoutedEventArgs args) { ++clicks; };
+
+    b.window.platform.host.onKeyDown(Key.space, ModifierKeys.none, false);
+    assert(b.button.isPressed);
+
+    other.focus();
+
+    assert(!b.button.isPressed, "let go of it, and say so");
+    assert(clicks == 0);
+
+    // The key comes up at the other button, which was never pressed.
+    b.window.platform.host.onKeyUp(Key.space, ModifierKeys.none);
+    assert(clicks == 0, "nothing happened, which is what was asked for");
+}
+
+unittest
+{
+    // A key the button has no use for is left alone, so it goes on up and the
+    // platform still gets its turn.
+    auto b = bench();
+    b.button.focus();
+
+    assert(!b.window.platform.host.onKeyDown(Key.f4, ModifierKeys.alt, false));
+    assert(b.window.platform.host.onKeyDown(Key.space, ModifierKeys.none, false),
+           "but the ones it presses on are claimed");
+}
+
+unittest
+{
+    // Clicking a button puts the keyboard on it, which is Control's doing and
+    // reaches Button through the super call at the top of its own hook.
+    auto b = bench();
+
+    assert(!b.button.isFocused);
+
+    b.window.platform.host.onMouseMove(50, 20);
+    b.window.platform.host.onMouseDown(MouseButton.left, 50, 20);
+
+    assert(b.button.isFocused);
+    assert(b.button.isPressed, "and the press still happened");
 }
