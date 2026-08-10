@@ -388,12 +388,61 @@ class Grid : Element
         columnProperty.overrideMetadata(getRtti!Element(), cellMeta);
         rowSpanProperty.overrideMetadata(getRtti!Element(), spanMeta);
         columnSpanProperty.overrideMetadata(getRtti!Element(), spanMeta);
+
+        // Room between the cells is room the grid has to ask its parent for, so
+        // it is a measure and not merely an arrange -- the same reasoning, and
+        // the same validator, as StackPanel's Spacing.
+        PropertyMetadata gapMeta;
+        gapMeta.defaultValue = Value(0.0f);
+        gapMeta.affectsMeasure = true;
+
+        rowSpacingProperty = Property.register("RowSpacing",
+            getRtti!float(), getRtti!Grid(), gapMeta, &isFiniteSpacing);
+        columnSpacingProperty = Property.register("ColumnSpacing",
+            getRtti!float(), getRtti!Grid(), gapMeta, &isFiniteSpacing);
     }
 
     static immutable(Property) rowProperty;
     static immutable(Property) columnProperty;
     static immutable(Property) rowSpanProperty;
     static immutable(Property) columnSpanProperty;
+    static immutable(Property) rowSpacingProperty;
+    static immutable(Property) columnSpacingProperty;
+
+   /**
+    * Room left between neighbouring tracks, and only between them: n tracks get
+    * n - 1 gaps, none before the first and none after the last.
+    *
+    * WPF has no such thing and makes every cell carry a margin instead, which
+    * puts the same number in a dozen places and gets it wrong in one of them.
+    * Avalonia, WinUI and CSS Grid all grew one; StackPanel here already has it.
+    *
+    * It adds to whatever margins the children carry rather than replacing them,
+    * and a negative gap pulls the tracks together and past each other -- both
+    * exactly as StackPanel's does.
+    */
+    @property float rowSpacing() const
+    {
+        return getValue(rowSpacingProperty).get!float;
+    }
+
+    /// ditto
+    @property void rowSpacing(float value)
+    {
+        setValue(rowSpacingProperty, Value(value));
+    }
+
+    /// ditto
+    @property float columnSpacing() const
+    {
+        return getValue(columnSpacingProperty).get!float;
+    }
+
+    /// ditto
+    @property void columnSpacing(float value)
+    {
+        setValue(columnSpacingProperty, Value(value));
+    }
 
    /**
     * Which cell a child sits in, and how many tracks it covers.
@@ -589,7 +638,11 @@ protected:
 
         measureChildren(columns, rows);
 
-        return Size(columns.total, rows.total);
+        // Floored, because a gap negative enough to out-pull the tracks is a
+        // direction rather than a length, and a size is not negative.  Only the
+        // answer is floored: the offsets below let the cursor run backwards,
+        // since overlapping is what was asked for.
+        return Size(atLeastZero(columns.total), atLeastZero(rows.total));
     }
 
    /**
@@ -649,6 +702,8 @@ private:
         * every pass, which is what lets the division be a plain loop.
         */
         bool[]           settled;
+        /// Room between neighbouring tracks; see Grid.rowSpacing.
+        float            spacing = 0;
 
        /*
         * How many tracks there really are.  A grid with no definitions has one
@@ -720,30 +775,49 @@ private:
             return anyContent;
         }
 
-        /// The whole length of the axis: every track laid end to end.
+       /*
+        * Every gap on the axis added up.
+        *
+        * Written with the guard rather than as `(count - 1) * spacing`, because
+        * count is a size_t and a single track would otherwise buy four billion
+        * gaps -- the same trap, spelled the same way, as in StackPanel.
+        */
+        @property float spacingTotal() const pure nothrow @nogc
+        {
+            return count > 1 ? spacing * (count - 1) : 0;
+        }
+
+        /// The whole length of the axis: every track and every gap.
         @property float total() const pure nothrow @nogc
         {
-            float sum = 0;
+            float sum = spacingTotal;
             foreach (size; sizes[0 .. count])
                 sum += size;
 
             return sum;
         }
 
-        /// Where a track starts.
+        /// Where a track starts: everything before it, and the gaps to it.
         float offsetOf(size_t index) const pure nothrow @nogc
         {
-            float offset = 0;
+            float offset = spacing * index;
             foreach (i; 0 .. index)
                 offset += sizes[i];
 
             return offset;
         }
 
-        /// How long a run of tracks is, laid end to end.
+       /*
+        * How long a run of tracks is, gaps included.
+        *
+        * The gaps *inside* the run and not the ones around it: a child covering
+        * two columns covers the space between them as well, because there is
+        * nothing else that could be in it.
+        */
         float extentOf(size_t index, size_t span) const pure nothrow @nogc
         {
-            float sum = 0;
+            float sum = span > 1 ? spacing * (span - 1) : 0;
+
             foreach (i; index .. index + span)
                 sum += sizes[i];
 
@@ -762,7 +836,8 @@ private:
         */
         void giveToContent(size_t index, size_t span, float wanted, float available)
         {
-            float have = 0;
+            // The gaps inside the span are already part of what the child has.
+            float have = span > 1 ? spacing * (span - 1) : 0;
             size_t growing = 0;
 
             foreach (i; index .. index + span)
@@ -793,13 +868,13 @@ private:
     Axis columnAxis()
     {
         ensureTracks(_columnSizes, _columnSettled, _columns.length);
-        return Axis(_columns, _columnSizes, _columnSettled);
+        return Axis(_columns, _columnSizes, _columnSettled, columnSpacing);
     }
 
     Axis rowAxis()
     {
         ensureTracks(_rowSizes, _rowSettled, _rows.length);
-        return Axis(_rows, _rowSizes, _rowSettled);
+        return Axis(_rows, _rowSizes, _rowSettled, rowSpacing);
     }
 
    /*
@@ -902,7 +977,9 @@ private:
         if (!(available < float.infinity))
             return;
 
-        float taken = 0;
+        // The gaps come out of the room before anything is divided: they are
+        // there whatever the tracks turn out to be.
+        float taken = axis.spacingTotal;
 
         foreach (i; 0 .. axis.count)
         {
@@ -1061,6 +1138,28 @@ private float clampLength(float value, float min, float max) pure nothrow @nogc
         value = min;
 
     return value > 0 ? value : 0;
+}
+
+/*
+ * A length a subtraction may have driven below zero.  element.d has the same
+ * helper and keeps it module-private, which is the rule this package inherits:
+ * a control does not reach into the machinery, it repeats the one line.
+ */
+private float atLeastZero(float value) pure nothrow @nogc
+{
+    return value > 0 ? value : 0;
+}
+
+/*
+ * A gap is a length, and neither infinity nor NaN is one.  Negatives overlap
+ * the tracks, which is what a negative margin already does.  Written as two
+ * comparisons rather than through std.math.isFinite because NaN fails both,
+ * which is the whole point -- the same line StackPanel carries.
+ */
+private bool isFiniteSpacing(const(Value) value)
+{
+    immutable gap = value.get!float;
+    return gap > -float.infinity && gap < float.infinity;
 }
 
 /// A cell index names a track, so it is not negative.
@@ -1685,4 +1784,155 @@ unittest
     layOut(grid, Size(400, 400));
 
     assert(tall.arrangedRect == Rect(0, 0, 40, 80));
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+
+    // A gap takes any length and refuses what is not one.
+    auto grid = new Grid;
+
+    assert(grid.rowSpacing == 0 && grid.columnSpacing == 0, "cells touch until told otherwise");
+
+    grid.columnSpacing = 8;
+    assert(grid.columnSpacing == 8);
+
+    grid.columnSpacing = -4;
+    assert(grid.columnSpacing == -4, "a negative gap overlaps, as a negative margin does");
+
+    assertThrown(grid.setValue(Grid.columnSpacingProperty, Value(float.infinity)));
+    assertThrown(grid.setValue(Grid.columnSpacingProperty, Value(float.nan)));
+    assert(grid.columnSpacing == -4, "and neither refusal disturbed what was there");
+}
+
+unittest
+{
+    // Gaps go between tracks and nowhere else: n tracks, n - 1 gaps, in the
+    // size the grid asks for and in where it puts things.
+    auto grid = new Grid;
+    grid.columnSpacing = 10;
+    grid.addColumn(GridLength(40));
+    grid.addColumn(GridLength(60));
+    grid.addColumn(GridLength(30));
+    grid.addRow(GridLength(20));
+
+    auto first = cell(grid, new Filler, 0, 0);
+    auto second = cell(grid, new Filler, 1, 0);
+    auto third = cell(grid, new Filler, 2, 0);
+
+    layOut(grid, Size(500, 400));
+
+    assert(grid.desiredSize.width == 150, "a hundred and thirty of track and two gaps");
+
+    assert(first.arrangedRect.x == 0);
+    assert(second.arrangedRect.x == 50, "forty of track and one gap");
+    assert(third.arrangedRect.x == 120, "and a hundred of track and two gaps");
+
+    assert(first.arrangedRect.width == 40, "a gap belongs to nobody");
+}
+
+unittest
+{
+    // One track has nothing to be between, and no track has less.
+    auto one = new Grid;
+    one.columnSpacing = 10;
+    one.addColumn(GridLength(40));
+    one.addRow(GridLength(20));
+    cell(one, new Filler, 0, 0);
+
+    one.measure(Size(500, 400));
+    assert(one.desiredSize.width == 40, "one track buys no gaps, not four billion of them");
+
+    // Nor does the implicit one.  Said as a difference rather than as a number,
+    // because the number is the whole offer: the implicit track is a star, and
+    // a star takes what it is given.
+    auto bare = new Grid;
+    bare.addChild(new Filler);
+
+    bare.measure(Size(500, 400));
+    immutable without = bare.desiredSize;
+
+    bare.columnSpacing = 10;
+    bare.rowSpacing = 10;
+    bare.measure(Size(500, 400));
+
+    assert(bare.desiredSize == without, "one track, no gaps, whatever the gap is set to");
+    assert(without.width == 500, "and a star takes the room it was offered");
+}
+
+unittest
+{
+    // The gaps come out of the room before the stars divide what is left.
+    auto grid = new Grid;
+    grid.columnSpacing = 20;
+    grid.addColumn(GridLength.star(1));
+    grid.addColumn(GridLength.star(1));
+
+    cell(grid, new Filler, 0, 0);
+    cell(grid, new Filler, 1, 0);
+
+    layOut(grid, Size(220, 50));
+
+    assert(grid.column(0).actualWidth == 100);
+    assert(grid.column(1).actualWidth == 100, "two hundred divided, and twenty left between them");
+}
+
+unittest
+{
+    // A child covering two tracks covers the gap between them too, because
+    // there is nothing else that could be in it.
+    auto grid = new Grid;
+    grid.columnSpacing = 10;
+    grid.addColumn(GridLength(40));
+    grid.addColumn(GridLength(60));
+    grid.addRow(GridLength(20));
+
+    auto wide = cell(grid, new Filler, 0, 0);
+    Grid.setColumnSpan(wide, 2);
+
+    layOut(grid, Size(500, 400));
+
+    assert(wide.arrangedRect == Rect(0, 0, 110, 20), "both tracks and the gap between them");
+}
+
+unittest
+{
+    // And an auto track under a spanned child is not asked to pay for the gap
+    // the child already has.
+    auto grid = new Grid;
+    grid.columnSpacing = 10;
+    grid.addColumn(GridLength.autoSize);
+    grid.addColumn(GridLength.autoSize);
+    grid.addRow(GridLength.autoSize);
+
+    auto wide = cell(grid, new Box(110, 10), 0, 0);
+    Grid.setColumnSpan(wide, 2);
+
+    layOut(grid, Size(500, 400));
+
+    assert(grid.column(0).actualWidth == 50);
+    assert(grid.column(1).actualWidth == 50, "fifty each, and the ten between them makes the hundred and ten");
+    assert(grid.desiredSize.width == 110);
+}
+
+unittest
+{
+    // A gap negative enough to out-pull the tracks takes the grid to nothing
+    // rather than to a negative size -- but the placement still walks backwards,
+    // because overlapping is what was asked for.
+    auto grid = new Grid;
+    grid.columnSpacing = -100;
+    grid.addColumn(GridLength(20));
+    grid.addColumn(GridLength(20));
+    grid.addRow(GridLength(20));
+
+    auto first = cell(grid, new Filler, 0, 0);
+    auto second = cell(grid, new Filler, 1, 0);
+
+    layOut(grid, Size(500, 400));
+
+    assert(grid.desiredSize.width == 0, "a size is not negative, however hard it is pulled");
+    assert(first.arrangedRect.x == 0);
+    assert(second.arrangedRect.x == -80, "twenty along and a hundred back");
 }
