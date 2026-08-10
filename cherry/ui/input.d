@@ -6,7 +6,7 @@ import cherry.ui.element;
 import cherry.ui.event;
 import cherry.ui.visual : Visual;
 
-public import cherry.platform.window : MouseButton;
+public import cherry.platform.window : Key, ModifierKeys, MouseButton;
 
 /**
  * Arguments of the mouse routed events: which button, and where in the
@@ -75,6 +75,81 @@ private:
 }
 
 /**
+ * Arguments of the key events: which key, what was held down with it, and
+ * whether the auto-repeat produced it rather than the user.
+ *
+ * The key names a **position**, not a character -- see Key.  Something acting
+ * on what was typed wants TextInputEventArgs instead, and the two are not
+ * interchangeable in either direction.
+ */
+class KeyEventArgs : RoutedEventArgs
+{
+    this(immutable(RoutedEvent) routedEvent, Key key, ModifierKeys modifiers,
+         bool isRepeat = false)
+    {
+        super(routedEvent);
+        _key = key;
+        _modifiers = modifiers;
+        _isRepeat = isRepeat;
+    }
+
+    @property Key key() pure const nothrow
+    {
+        return _key;
+    }
+
+   /**
+    * Which modifiers were held.  A bit field: test with `&`, because
+    * Ctrl+Shift+S is not something other than Ctrl+S with a bit to spare.
+    */
+    @property ModifierKeys modifiers() pure const nothrow
+    {
+        return _modifiers;
+    }
+
+   /**
+    * Whether the key was already down and the auto-repeat sent this.
+    *
+    * The thing a control has to decide for itself: holding Space on a button
+    * should press it once, holding it in a text field should type many spaces.
+    */
+    @property bool isRepeat() pure const nothrow
+    {
+        return _isRepeat;
+    }
+
+private:
+    Key         _key;
+    ModifierKeys _modifiers;
+    bool        _isRepeat;
+}
+
+/**
+ * Arguments of the text event: what was typed.
+ *
+ * A string and not a character, because one keystroke is not one character and
+ * one character is not one keystroke: an input method can deliver a word at a
+ * time, and a character outside the basic plane arrives from the platform in
+ * pieces that are joined before this is raised.
+ */
+class TextInputEventArgs : RoutedEventArgs
+{
+    this(immutable(RoutedEvent) routedEvent, string text)
+    {
+        super(routedEvent);
+        _text = text;
+    }
+
+    @property string text() pure const nothrow
+    {
+        return _text;
+    }
+
+private:
+    string _text;
+}
+
+/**
  * The mouse routed events, registered for every Element.  The window
  * hit-tests each native notification and raises these on the deepest element
  * under the pointer, so they travel up from there.
@@ -110,6 +185,40 @@ immutable RoutedEvent mouseLeaveEvent;
  */
 immutable RoutedEvent mouseCaptureLostEvent;
 
+/**
+ * A key went down or came back up, and what was typed.
+ *
+ * Bubbling, and raised on the **focused** element -- the keyboard's answer to
+ * the question hit-testing answers for the mouse.  With nothing focused they
+ * start at the window, so a shortcut handler placed there hears everything
+ * whether or not anything inside has the keyboard.
+ *
+ * There are no preview (tunnelling) counterparts.  What they exist for in WPF
+ * is letting the framework act before a control does, and the class-handler
+ * tier already gives that -- see registerClassHandler in event.d.  They arrive
+ * the day something genuinely needs to intercept an event on its way down.
+ */
+immutable RoutedEvent keyDownEvent;
+/// ditto
+immutable RoutedEvent keyUpEvent;
+/// ditto
+immutable RoutedEvent textInputEvent;
+
+/**
+ * The keyboard arrived at an element, or left it.
+ *
+ * **Bubbling**, which is WPF's choice and the opposite of the enter/leave pair
+ * next to it.  The difference is what the two are about: the pointer is inside
+ * everything that contains where it is, so telling a common ancestor it was
+ * left and entered again would be false, whereas the keyboard is at exactly one
+ * element and an ancestor hearing about it is hearing something true --
+ * "something inside me now has the keyboard", which is what a container wants
+ * in order to light up.
+ */
+immutable RoutedEvent gotFocusEvent;
+/// ditto
+immutable RoutedEvent lostFocusEvent;
+
 shared static this()
 {
     mouseDownEvent  = RoutedEvent.register("MouseDown", RoutingStrategy.bubble, getRtti!Element());
@@ -119,6 +228,12 @@ shared static this()
     mouseLeaveEvent = RoutedEvent.register("MouseLeave", RoutingStrategy.direct, getRtti!Element());
     mouseCaptureLostEvent = RoutedEvent.register("MouseCaptureLost",
         RoutingStrategy.direct, getRtti!Element());
+
+    keyDownEvent    = RoutedEvent.register("KeyDown", RoutingStrategy.bubble, getRtti!Element());
+    keyUpEvent      = RoutedEvent.register("KeyUp", RoutingStrategy.bubble, getRtti!Element());
+    textInputEvent  = RoutedEvent.register("TextInput", RoutingStrategy.bubble, getRtti!Element());
+    gotFocusEvent   = RoutedEvent.register("GotFocus", RoutingStrategy.bubble, getRtti!Element());
+    lostFocusEvent  = RoutedEvent.register("LostFocus", RoutingStrategy.bubble, getRtti!Element());
 
     // And the tier that lets an element act on the mouse because of what it is:
     // one class handler apiece, each calling the matching hook on Element, so
@@ -134,6 +249,12 @@ shared static this()
     mouseLeaveEvent.registerClassHandler(getRtti!Element(), &Element.callHandleMouseLeave);
     mouseCaptureLostEvent.registerClassHandler(getRtti!Element(),
         &Element.callHandleMouseCaptureLost);
+
+    keyDownEvent.registerClassHandler(getRtti!Element(), &Element.callHandleKeyDown);
+    keyUpEvent.registerClassHandler(getRtti!Element(), &Element.callHandleKeyUp);
+    textInputEvent.registerClassHandler(getRtti!Element(), &Element.callHandleTextInput);
+    gotFocusEvent.registerClassHandler(getRtti!Element(), &Element.callHandleGotFocus);
+    lostFocusEvent.registerClassHandler(getRtti!Element(), &Element.callHandleLostFocus);
 }
 
 /**
@@ -173,6 +294,36 @@ shared static this()
 @property auto onMouseCaptureLost(Element element)
 {
     return routedAccessor(element, mouseCaptureLostEvent);
+}
+
+/// ditto
+@property auto onKeyDown(Element element)
+{
+    return routedAccessor(element, keyDownEvent);
+}
+
+/// ditto
+@property auto onKeyUp(Element element)
+{
+    return routedAccessor(element, keyUpEvent);
+}
+
+/// ditto
+@property auto onTextInput(Element element)
+{
+    return routedAccessor(element, textInputEvent);
+}
+
+/// ditto
+@property auto onGotFocus(Element element)
+{
+    return routedAccessor(element, gotFocusEvent);
+}
+
+/// ditto
+@property auto onLostFocus(Element element)
+{
+    return routedAccessor(element, lostFocusEvent);
 }
 
 package:
@@ -363,6 +514,118 @@ unittest
 
     assert(probe.seen == ["up", "move", "enter", "leave", "capture-lost"],
            "all six wired, each to its own");
+}
+
+unittest
+{
+    // The keyboard events are registered once, distinctly, for Element.
+    assert(keyDownEvent.routingStrategy == RoutingStrategy.bubble);
+    assert(keyUpEvent.routingStrategy == RoutingStrategy.bubble);
+    assert(textInputEvent.routingStrategy == RoutingStrategy.bubble);
+    assert(keyDownEvent.id != keyUpEvent.id && keyUpEvent.id != textInputEvent.id);
+
+    // Focus bubbles, unlike enter and leave beside it -- "something inside me
+    // has the keyboard" is a true thing to tell an ancestor, where "the pointer
+    // left me" would not have been.
+    assert(gotFocusEvent.routingStrategy == RoutingStrategy.bubble);
+    assert(lostFocusEvent.routingStrategy == RoutingStrategy.bubble);
+    assert(gotFocusEvent.ownerType is getRtti!Element());
+}
+
+unittest
+{
+    // A key event says which key, what was held, and whether the user or the
+    // auto-repeat produced it.
+    auto plain = new KeyEventArgs(keyDownEvent, Key.space, ModifierKeys.none);
+
+    assert(plain.key == Key.space);
+    assert(plain.modifiers == ModifierKeys.none);
+    assert(!plain.isRepeat, "a press until something says otherwise");
+
+    immutable held = cast(ModifierKeys)(ModifierKeys.control | ModifierKeys.shift);
+    auto combo = new KeyEventArgs(keyDownEvent, Key.s, held, true);
+
+    assert(combo.isRepeat);
+    assert((combo.modifiers & ModifierKeys.control) != 0);
+    assert((combo.modifiers & ModifierKeys.shift) != 0);
+    assert((combo.modifiers & ModifierKeys.alt) == 0);
+    assert(combo.modifiers != ModifierKeys.control,
+           "and testing a bit field for equality is how a shortcut goes wrong");
+
+    // What was typed is a different question with a different answer.
+    auto typed = new TextInputEventArgs(textInputEvent, "é");
+    assert(typed.text == "é");
+}
+
+unittest
+{
+    // The five keyboard hooks are wired, each to its own event, and each ahead
+    // of anything subscribed to the element.
+    static class Typist : Element
+    {
+        string[] seen;
+
+        protected override void handleKeyDown(RoutedEventArgs args)
+        {
+            super.handleKeyDown(args);
+
+            auto pressed = cast(KeyEventArgs) args;
+            seen ~= pressed.key == Key.a ? "down:a" : "down:?";
+        }
+
+        protected override void handleKeyUp(RoutedEventArgs args)
+        {
+            super.handleKeyUp(args);
+            seen ~= "up";
+        }
+
+        protected override void handleTextInput(RoutedEventArgs args)
+        {
+            super.handleTextInput(args);
+            seen ~= "text:" ~ (cast(TextInputEventArgs) args).text;
+        }
+
+        protected override void handleGotFocus(RoutedEventArgs args)
+        {
+            super.handleGotFocus(args);
+            seen ~= "got";
+        }
+
+        protected override void handleLostFocus(RoutedEventArgs args)
+        {
+            super.handleLostFocus(args);
+            seen ~= "lost";
+        }
+    }
+
+    auto typist = new Typist;
+    typist.onKeyDown ~= (Element sender, RoutedEventArgs args) {
+        (cast(Typist) sender).seen ~= "subscriber";
+    };
+
+    typist.raiseEvent(new KeyEventArgs(keyDownEvent, Key.a, ModifierKeys.none));
+    typist.raiseEvent(new KeyEventArgs(keyUpEvent, Key.a, ModifierKeys.none));
+    typist.raiseEvent(new TextInputEventArgs(textInputEvent, "a"));
+    typist.raiseEvent(new RoutedEventArgs(gotFocusEvent));
+    typist.raiseEvent(new RoutedEventArgs(lostFocusEvent));
+
+    assert(typist.seen == ["down:a", "subscriber", "up", "text:a", "got", "lost"],
+           "each hook on its own event, and the hook before the queue");
+}
+
+unittest
+{
+    // Focus bubbles: a container hears that something inside it has the
+    // keyboard, with args.source naming which.
+    auto panel = new Element;
+    auto field = new Element;
+    panel.addChild(field);
+
+    Element heard;
+    panel.onGotFocus ~= (Element sender, RoutedEventArgs args) { heard = args.source; };
+
+    field.raiseEvent(new RoutedEventArgs(gotFocusEvent));
+    assert(heard is field);
 }
 
 unittest

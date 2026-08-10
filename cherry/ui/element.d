@@ -1282,6 +1282,36 @@ package:
         sender.handleMouseCaptureLost(args);
     }
 
+    /// ditto
+    static void callHandleKeyDown(Element sender, RoutedEventArgs args)
+    {
+        sender.handleKeyDown(args);
+    }
+
+    /// ditto
+    static void callHandleKeyUp(Element sender, RoutedEventArgs args)
+    {
+        sender.handleKeyUp(args);
+    }
+
+    /// ditto
+    static void callHandleTextInput(Element sender, RoutedEventArgs args)
+    {
+        sender.handleTextInput(args);
+    }
+
+    /// ditto
+    static void callHandleGotFocus(Element sender, RoutedEventArgs args)
+    {
+        sender.handleGotFocus(args);
+    }
+
+    /// ditto
+    static void callHandleLostFocus(Element sender, RoutedEventArgs args)
+    {
+        sender.handleLostFocus(args);
+    }
+
 protected:
    /**
     * What this element does about the mouse because of what it is -- as opposed
@@ -1333,6 +1363,51 @@ protected:
 
     /// ditto
     void handleMouseCaptureLost(RoutedEventArgs args)
+    {
+    }
+
+   /**
+    * What this element does about the keyboard because of what it is.
+    *
+    * The same tier and the same rules as the mouse hooks above: before every
+    * handler added to any one element, skipped once the event is handled, and
+    * overridden rather than subscribed to.  Cast the args to KeyEventArgs or
+    * TextInputEventArgs -- this module cannot name either, for the reason given
+    * there.
+    *
+    * handleKeyDown is where a key becomes an action.  Note that the auto-repeat
+    * reaches it too, marked as such in the args: a button firing once per press
+    * must look, a text field taking many characters must not.
+    *
+    * handleTextInput is a different question from handleKeyDown and not a
+    * refinement of it -- what was typed, after the layout and the modifiers and
+    * any dead keys, rather than which key went down.
+    *
+    * handleLostFocus is the keyboard's mouseCaptureLost: whatever a control
+    * started on a key going down, it has to be able to undo when the keyboard
+    * leaves before the key comes back up.
+    */
+    void handleKeyDown(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleKeyUp(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleTextInput(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleGotFocus(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleLostFocus(RoutedEventArgs args)
     {
     }
 
