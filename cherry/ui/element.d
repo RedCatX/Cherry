@@ -1083,7 +1083,109 @@ package:
         setValue(isMouseOverKey, Value(value));
     }
 
+   /*
+    * The class handlers cherry.ui.input registers for Element, one per mouse
+    * event, each doing nothing but calling the hook below it.
+    *
+    * They exist because a hook is protected and the module that owns the mouse
+    * events is not a derived class, so it cannot call one.  Neither side can
+    * move to the other, either: input.d already imports this module, and making
+    * that mutual with a module constructor on each is the cyclic-dependency
+    * abort that happens before main and names neither module.
+    *
+    * Static, so that taking an address gives a plain function pointer -- what a
+    * class handler is.  The call inside is an ordinary virtual dispatch, so
+    * what runs is the override.
+    */
+    static void callHandleMouseDown(Element sender, RoutedEventArgs args)
+    {
+        sender.handleMouseDown(args);
+    }
+
+    /// ditto
+    static void callHandleMouseUp(Element sender, RoutedEventArgs args)
+    {
+        sender.handleMouseUp(args);
+    }
+
+    /// ditto
+    static void callHandleMouseMove(Element sender, RoutedEventArgs args)
+    {
+        sender.handleMouseMove(args);
+    }
+
+    /// ditto
+    static void callHandleMouseEnter(Element sender, RoutedEventArgs args)
+    {
+        sender.handleMouseEnter(args);
+    }
+
+    /// ditto
+    static void callHandleMouseLeave(Element sender, RoutedEventArgs args)
+    {
+        sender.handleMouseLeave(args);
+    }
+
+    /// ditto
+    static void callHandleMouseCaptureLost(Element sender, RoutedEventArgs args)
+    {
+        sender.handleMouseCaptureLost(args);
+    }
+
 protected:
+   /**
+    * What this element does about the mouse because of what it is -- as opposed
+    * to what somebody asked it to do about the mouse.
+    *
+    * These run in the class-handler tier: before every handler added to any one
+    * element, and skipped once something has marked the event handled.  A
+    * control puts its behaviour here instead of subscribing to its own events,
+    * so that the behaviour does not stand in the queue that the code using the
+    * control subscribes to -- which is what makes an event the control marks
+    * handled silence handlers that had every right to run.
+    *
+    * Override and call super first.  The base does nothing, and that is not a
+    * promise about what it will never do.
+    *
+    * **The parameter is RoutedEventArgs, not MouseEventArgs**, and it has to
+    * be: this module cannot name MouseEventArgs without importing the module
+    * that imports it, and two module constructors in one import cycle abort the
+    * program before main with an error that names neither.  Cast it -- every
+    * mouse handler in the framework opens with that cast already.
+    *
+    * These are registered for Element, so a class handler a derived type
+    * registers for itself runs ahead of them: the tier goes derived-first, and
+    * a control that has to get in front of the hook entirely can.
+    */
+    void handleMouseDown(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleMouseUp(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleMouseMove(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleMouseEnter(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleMouseLeave(RoutedEventArgs args)
+    {
+    }
+
+    /// ditto
+    void handleMouseCaptureLost(RoutedEventArgs args)
+    {
+    }
+
    /**
     * Puts a repaint request on the layout pass's queue.
     *

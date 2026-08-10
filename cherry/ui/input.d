@@ -119,6 +119,21 @@ shared static this()
     mouseLeaveEvent = RoutedEvent.register("MouseLeave", RoutingStrategy.direct, getRtti!Element());
     mouseCaptureLostEvent = RoutedEvent.register("MouseCaptureLost",
         RoutingStrategy.direct, getRtti!Element());
+
+    // And the tier that lets an element act on the mouse because of what it is:
+    // one class handler apiece, each calling the matching hook on Element, so
+    // that a control overrides a method instead of subscribing to itself.
+    //
+    // Registered here rather than in element.d because that is where the events
+    // are, and registered for Element rather than by each control because the
+    // hook is Element's -- what a control does is override it.
+    mouseDownEvent.registerClassHandler(getRtti!Element(), &Element.callHandleMouseDown);
+    mouseUpEvent.registerClassHandler(getRtti!Element(), &Element.callHandleMouseUp);
+    mouseMoveEvent.registerClassHandler(getRtti!Element(), &Element.callHandleMouseMove);
+    mouseEnterEvent.registerClassHandler(getRtti!Element(), &Element.callHandleMouseEnter);
+    mouseLeaveEvent.registerClassHandler(getRtti!Element(), &Element.callHandleMouseLeave);
+    mouseCaptureLostEvent.registerClassHandler(getRtti!Element(),
+        &Element.callHandleMouseCaptureLost);
 }
 
 /**
@@ -278,6 +293,89 @@ unittest
 
     element.setMouseOver(false);
     assert(!element.isMouseOver);
+}
+
+unittest
+{
+    // Every mouse event reaches the hook of the same name, ahead of anything
+    // subscribed to the element -- and the hook is handed the very args the
+    // subscribers get, so a control reads the position from the same object.
+    static class Probe : Element
+    {
+        string[] seen;
+        RoutedEventArgs last;
+
+        protected override void handleMouseDown(RoutedEventArgs args)
+        {
+            super.handleMouseDown(args);
+            seen ~= "down";
+            last = args;
+        }
+
+        protected override void handleMouseUp(RoutedEventArgs args)
+        {
+            super.handleMouseUp(args);
+            seen ~= "up";
+        }
+
+        protected override void handleMouseMove(RoutedEventArgs args)
+        {
+            super.handleMouseMove(args);
+            seen ~= "move";
+        }
+
+        protected override void handleMouseEnter(RoutedEventArgs args)
+        {
+            super.handleMouseEnter(args);
+            seen ~= "enter";
+        }
+
+        protected override void handleMouseLeave(RoutedEventArgs args)
+        {
+            super.handleMouseLeave(args);
+            seen ~= "leave";
+        }
+
+        protected override void handleMouseCaptureLost(RoutedEventArgs args)
+        {
+            super.handleMouseCaptureLost(args);
+            seen ~= "capture-lost";
+        }
+    }
+
+    auto probe = new Probe;
+    probe.onMouseDown ~= (Element sender, RoutedEventArgs args) {
+        (cast(Probe) sender).seen ~= "subscriber";
+    };
+
+    auto down = new MouseEventArgs(mouseDownEvent, MouseButton.left, 7, 9);
+    probe.raiseEvent(down);
+
+    assert(probe.seen == ["down", "subscriber"], "the hook first, then the queue");
+    assert(probe.last is down, "and on the same args, so the position is the same one");
+
+    probe.seen = null;
+    probe.raiseEvent(new MouseEventArgs(mouseUpEvent, MouseButton.left, 7, 9));
+    probe.raiseEvent(new MouseEventArgs(mouseMoveEvent, MouseButton.none, 7, 9));
+    probe.raiseEvent(new MouseEventArgs(mouseEnterEvent, MouseButton.none, 7, 9));
+    probe.raiseEvent(new MouseEventArgs(mouseLeaveEvent, MouseButton.none, 7, 9));
+    probe.raiseEvent(new RoutedEventArgs(mouseCaptureLostEvent));
+
+    assert(probe.seen == ["up", "move", "enter", "leave", "capture-lost"],
+           "all six wired, each to its own");
+}
+
+unittest
+{
+    // An element that overrides nothing is unaffected: the hooks are empty and
+    // the events reach its subscribers exactly as they did before the tier.
+    auto plain = new Element;
+
+    int heard;
+    plain.onMouseDown ~= (Element sender, RoutedEventArgs args) { ++heard; };
+
+    plain.raiseEvent(new MouseEventArgs(mouseDownEvent, MouseButton.left, 1, 2));
+    assert(heard == 1);
 }
 
 unittest
