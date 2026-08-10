@@ -8,6 +8,8 @@ module cherry.ui.controls.grid;
 import cherry.core.property;
 import cherry.core.rtti;
 import cherry.core.value;
+import cherry.platform.render : Rect, Size;
+import cherry.ui.element;
 import cherry.ui.styledelement;
 
 /**
@@ -324,6 +326,607 @@ class ColumnDefinition : DefinitionBase
     @property float actualWidth() const { return actualLength; }
 }
 
+/**
+ * Lays its children out in rows and columns, dividing the room between them.
+ *
+ * The first container that *divides* rather than merely placing one thing after
+ * another, which is what makes a form possible: two columns of cells line up
+ * across every row, because it is the columns and not the cells that decide the
+ * width.
+ *
+ * **Where a child goes is a property of the child**, attached to it by this
+ * class: `Grid.setRow(button, 1)`.  It has to be, because there is nothing else
+ * for it to be -- a Button knows nothing about grids, and a grid that kept its
+ * own table of who sits where would have to be told every time a child moved.
+ *
+ * A grid with no definitions at all is one row and one column of a single star,
+ * which makes it an ordinary single-cell container -- the same thing a plain
+ * Element is, so nothing is lost by reaching for a Grid early.
+ *
+ * Not a Panel, because there is still no Panel: what WPF puts there is Children
+ * (Element has it), Background (Control has it) and IsItemsHost (there are no
+ * templates), so the base class would be empty.
+ */
+class Grid : Element
+{
+    shared static this()
+    {
+        // Which cell a child sits in changes how much room the grid needs, so
+        // it is the parent's measure that has to be redone -- the child itself
+        // is unaffected until the grid hands it a different slot.
+        PropertyMetadata cellMeta;
+        cellMeta.defaultValue = Value(0);
+        cellMeta.affectsParentMeasure = true;
+
+        rowProperty = Property.registerAttached("Row",
+            getRtti!int(), getRtti!Grid(), cellMeta, &isUsableIndex);
+        columnProperty = Property.registerAttached("Column",
+            getRtti!int(), getRtti!Grid(), cellMeta, &isUsableIndex);
+
+        PropertyMetadata spanMeta;
+        spanMeta.defaultValue = Value(1);
+        spanMeta.affectsParentMeasure = true;
+
+        rowSpanProperty = Property.registerAttached("RowSpan",
+            getRtti!int(), getRtti!Grid(), spanMeta, &isUsableSpan);
+        columnSpanProperty = Property.registerAttached("ColumnSpan",
+            getRtti!int(), getRtti!Grid(), spanMeta, &isUsableSpan);
+
+        // **The four lines that make the flags above work at all.**
+        //
+        // Property.register keeps only the default *value* in a property's bare
+        // metadata and attaches everything else as an override on the owner
+        // type; an object resolves metadata by walking its own class chain.  A
+        // Button given a Grid.Row therefore never reaches Grid, gets the bare
+        // metadata, and affectsParentMeasure is not there -- so the grid would
+        // never be told, and nothing would look wrong except the layout.
+        //
+        // Overriding for Element puts the flags where every child will find
+        // them.  An attached property may be overridden for any host type,
+        // which is exactly what that permission is for.
+        rowProperty.overrideMetadata(getRtti!Element(), cellMeta);
+        columnProperty.overrideMetadata(getRtti!Element(), cellMeta);
+        rowSpanProperty.overrideMetadata(getRtti!Element(), spanMeta);
+        columnSpanProperty.overrideMetadata(getRtti!Element(), spanMeta);
+    }
+
+    static immutable(Property) rowProperty;
+    static immutable(Property) columnProperty;
+    static immutable(Property) rowSpanProperty;
+    static immutable(Property) columnSpanProperty;
+
+   /**
+    * Which cell a child sits in, and how many tracks it covers.
+    *
+    * Static, taking the child, because that is what an attached property is:
+    * the value lives on the child and the meaning belongs to the grid.  An
+    * index past the last track is pinned to the last one rather than refused --
+    * a child put in row 5 of a three-row grid is a mistake worth seeing on the
+    * screen, not one worth ending the program over.
+    */
+    static int getRow(const(Element) element)
+    {
+        return element.getValue(rowProperty).get!int;
+    }
+
+    /// ditto
+    static void setRow(Element element, int value)
+    {
+        element.setValue(rowProperty, Value(value));
+    }
+
+    /// ditto
+    static int getColumn(const(Element) element)
+    {
+        return element.getValue(columnProperty).get!int;
+    }
+
+    /// ditto
+    static void setColumn(Element element, int value)
+    {
+        element.setValue(columnProperty, Value(value));
+    }
+
+    /// ditto
+    static int getRowSpan(const(Element) element)
+    {
+        return element.getValue(rowSpanProperty).get!int;
+    }
+
+    /// ditto
+    static void setRowSpan(Element element, int value)
+    {
+        element.setValue(rowSpanProperty, Value(value));
+    }
+
+    /// ditto
+    static int getColumnSpan(const(Element) element)
+    {
+        return element.getValue(columnSpanProperty).get!int;
+    }
+
+    /// ditto
+    static void setColumnSpan(Element element, int value)
+    {
+        element.setValue(columnSpanProperty, Value(value));
+    }
+
+   /**
+    * Adds a row, and the same for a column.
+    *
+    * Shaped like addChild rather than as a collection object: the framework has
+    * one way of adding things to an element and this is it.  The overload
+    * taking a length is the one almost every caller wants, and it hands back
+    * the definition it made so that a bound can be put on it.
+    */
+    void addRow(RowDefinition definition)
+    in {
+        assert(definition !is null);
+    }
+    do {
+        _rows ~= definition;
+        definition.setOwner(this);
+        invalidateMeasure();
+    }
+
+    /// ditto
+    RowDefinition addRow(GridLength height)
+    {
+        auto definition = new RowDefinition(height);
+        addRow(definition);
+        return definition;
+    }
+
+    /// ditto
+    void addColumn(ColumnDefinition definition)
+    in {
+        assert(definition !is null);
+    }
+    do {
+        _columns ~= definition;
+        definition.setOwner(this);
+        invalidateMeasure();
+    }
+
+    /// ditto
+    ColumnDefinition addColumn(GridLength width)
+    {
+        auto definition = new ColumnDefinition(width);
+        addColumn(definition);
+        return definition;
+    }
+
+    /// How many rows and columns were defined.  Zero means the implicit cell.
+    @property size_t rowCount() const pure nothrow @nogc
+    {
+        return _rows.length;
+    }
+
+    /// ditto
+    @property size_t columnCount() const pure nothrow @nogc
+    {
+        return _columns.length;
+    }
+
+   /**
+    * The definition at an index.
+    *
+    * The cast is safe by construction: nothing but addRow puts anything into
+    * the array, and it takes a RowDefinition.  The array is declared as the
+    * base so that the sizing code can be written once for both axes -- D has no
+    * covariance for mutable arrays, and building a view per pass would allocate
+    * on every layout.
+    */
+    RowDefinition row(size_t index)
+    in {
+        assert(index < _rows.length);
+    }
+    do {
+        return cast(RowDefinition) _rows[index];
+    }
+
+    /// ditto
+    ColumnDefinition column(size_t index)
+    in {
+        assert(index < _columns.length);
+    }
+    do {
+        return cast(ColumnDefinition) _columns[index];
+    }
+
+    /// Removes every row, or every column.  The children stay where they are.
+    void clearRows()
+    {
+        foreach (definition; _rows)
+            definition.setOwner(null);
+
+        _rows = null;
+        invalidateMeasure();
+    }
+
+    /// ditto
+    void clearColumns()
+    {
+        foreach (definition; _columns)
+            definition.setOwner(null);
+
+        _columns = null;
+        invalidateMeasure();
+    }
+
+protected:
+   /**
+    * Works out how long every track is, then asks for the sum of them.
+    *
+    * The order is forced by the kinds of length and by nothing else.  A pixel
+    * track is known at once.  An auto track is known once the children in it
+    * have been measured.  A star track is known only after both, because it
+    * divides what those two leave behind -- so the passes are: fix the pixels,
+    * grow the autos, divide the remainder, and then measure everybody against
+    * the tracks they will really be given.
+    *
+    * **Both axes are resolved together and not one after the other**, because a
+    * child answers with a width and a height at the same time: a single measure
+    * of it feeds an auto column and an auto row at once.
+    *
+    * A star with nothing to divide is an auto.  An unbounded offer is the
+    * question "how big would you like to be?", and a share of an unbounded
+    * remainder is not an answer to it -- so under infinity a star sizes itself
+    * to its content, which is also what keeps this method's answer finite.
+    */
+    override Size measureOverride(Size availableSize)
+    {
+        auto columns = columnAxis();
+        auto rows = rowAxis();
+
+        resolveFixedTracks(columns, availableSize.width);
+        resolveFixedTracks(rows, availableSize.height);
+
+        growAutoTracks(columns, rows, availableSize);
+
+        divideRemainder(columns, availableSize.width);
+        divideRemainder(rows, availableSize.height);
+
+        measureChildren(columns, rows);
+
+        return Size(columns.total, rows.total);
+    }
+
+   /**
+    * Places every child in the cell it was given.
+    *
+    * The stars are divided again here, against the room actually granted rather
+    * than the room asked for: a grid stretched by its parent has to hand the
+    * extra to the tracks that were meant to take it.  The auto tracks are left
+    * as they were measured -- they are about their content, and the content did
+    * not change because the window got wider.
+    */
+    override Size arrangeOverride(Size finalSize)
+    {
+        auto columns = columnAxis();
+        auto rows = rowAxis();
+
+        divideRemainder(columns, finalSize.width);
+        divideRemainder(rows, finalSize.height);
+
+        publishActualLengths();
+
+        auto view = children;
+
+        foreach (i; 0 .. view.length)
+        {
+            auto child = view[i];
+
+            immutable ci = trackIndex(getColumn(child), columns.count);
+            immutable ri = trackIndex(getRow(child), rows.count);
+
+            child.arrange(Rect(columns.offsetOf(ci), rows.offsetOf(ri),
+                               columns.extentOf(ci), rows.extentOf(ri)));
+        }
+
+        return finalSize;
+    }
+
+private:
+   /*
+    * One axis of the grid, as the sizing code sees it: the definitions, the
+    * resolved sizes beside them, and nothing about which way it points.
+    *
+    * A view over the grid's own arrays rather than a copy -- writing to `sizes`
+    * writes to the grid.  Built fresh on each pass because it is three words;
+    * the arrays it points at are kept.
+    */
+    static struct Axis
+    {
+        DefinitionBase[] definitions;
+        float[]          sizes;
+
+       /*
+        * How many tracks there really are.  A grid with no definitions has one
+        * implicit track, so this is never zero and every division below is safe.
+        */
+        @property size_t count() const pure nothrow @nogc
+        {
+            return definitions.length ? definitions.length : 1;
+        }
+
+        GridLength lengthAt(size_t index) const
+        {
+            return definitions.length ? definitions[index].length : GridLength.star(1);
+        }
+
+        float minAt(size_t index) const
+        {
+            return definitions.length ? definitions[index].minLength : 0;
+        }
+
+        float maxAt(size_t index) const
+        {
+            return definitions.length ? definitions[index].maxLength : float.infinity;
+        }
+
+       /*
+        * Whether this track's size comes from what is in it.  True for an auto
+        * track always, and for a star track when there is no remainder to
+        * divide because nothing bounded it.
+        */
+        bool growsFromContent(size_t index, float available) const
+        {
+            immutable length = lengthAt(index);
+            return length.isAuto || (length.isStar && !(available < float.infinity));
+        }
+
+        /// Whether this track takes a share of what the others leave.
+        bool sharesRemainder(size_t index, float available) const
+        {
+            return lengthAt(index).isStar && available < float.infinity;
+        }
+
+        /// The whole length of the axis: every track laid end to end.
+        @property float total() const pure nothrow @nogc
+        {
+            float sum = 0;
+            foreach (size; sizes[0 .. count])
+                sum += size;
+
+            return sum;
+        }
+
+        /// Where a track starts.
+        float offsetOf(size_t index) const pure nothrow @nogc
+        {
+            float offset = 0;
+            foreach (i; 0 .. index)
+                offset += sizes[i];
+
+            return offset;
+        }
+
+        /// How long a track is.
+        float extentOf(size_t index) const pure nothrow @nogc
+        {
+            return sizes[index];
+        }
+    }
+
+    Axis columnAxis()
+    {
+        ensureSizes(_columnSizes, _columns.length);
+        return Axis(_columns, _columnSizes);
+    }
+
+    Axis rowAxis()
+    {
+        ensureSizes(_rowSizes, _rows.length);
+        return Axis(_rows, _rowSizes);
+    }
+
+   /*
+    * Keeps the resolved sizes as long as the definitions, with room for the
+    * implicit track when there are none.  Reused between passes rather than
+    * allocated per pass: layout runs on every frame that changes anything.
+    */
+    static void ensureSizes(ref float[] sizes, size_t definitions)
+    {
+        immutable wanted = definitions ? definitions : 1;
+
+        if (sizes.length != wanted)
+            sizes.length = wanted;
+    }
+
+   /*
+    * The tracks whose length was known before anything was measured, plus the
+    * floor every other track starts from.
+    */
+    static void resolveFixedTracks(ref Axis axis, float available)
+    {
+        foreach (i; 0 .. axis.count)
+        {
+            immutable length = axis.lengthAt(i);
+
+            axis.sizes[i] = length.isAbsolute
+                ? clampLength(length.value, axis.minAt(i), axis.maxAt(i))
+                : axis.minAt(i);
+        }
+    }
+
+   /*
+    * Grows the content-sized tracks to fit what is in them.
+    *
+    * Only the children that land in such a track are measured here, and they
+    * are offered infinity on every axis that is not already fixed -- the
+    * question being asked is how big they would like to be, and a track that
+    * grows to its content has to hear the real answer.
+    *
+    * A child in a track that will take a share of the remainder is left alone:
+    * its size cannot be known yet, and it is measured for real in the last pass.
+    */
+    void growAutoTracks(ref Axis columns, ref Axis rows, Size availableSize)
+    {
+        auto view = children;
+
+        foreach (i; 0 .. view.length)
+        {
+            auto child = view[i];
+
+            immutable ci = trackIndex(getColumn(child), columns.count);
+            immutable ri = trackIndex(getRow(child), rows.count);
+
+            immutable growsWide = columns.growsFromContent(ci, availableSize.width);
+            immutable growsTall = rows.growsFromContent(ri, availableSize.height);
+
+            if (!growsWide && !growsTall)
+                continue;
+
+            child.measure(Size(columns.lengthAt(ci).isAbsolute ? columns.sizes[ci] : float.infinity,
+                               rows.lengthAt(ri).isAbsolute ? rows.sizes[ri] : float.infinity));
+
+            immutable wanted = child.desiredSize;
+
+            if (growsWide && wanted.width > columns.sizes[ci])
+                columns.sizes[ci] = clampLength(wanted.width, columns.minAt(ci), columns.maxAt(ci));
+
+            if (growsTall && wanted.height > rows.sizes[ri])
+                rows.sizes[ri] = clampLength(wanted.height, rows.minAt(ri), rows.maxAt(ri));
+        }
+    }
+
+   /*
+    * Divides what the fixed and content-sized tracks left over among the stars,
+    * in proportion to their weights.
+    *
+    * Nothing to do when the offer is unbounded: those tracks were sized by
+    * their content in the pass above, and there is no remainder of infinity.
+    */
+    static void divideRemainder(ref Axis axis, float available)
+    {
+        if (!(available < float.infinity))
+            return;
+
+        float weight = 0;
+        float taken = 0;
+
+        foreach (i; 0 .. axis.count)
+        {
+            if (axis.sharesRemainder(i, available))
+                weight += axis.lengthAt(i).value;
+            else
+                taken += axis.sizes[i];
+        }
+
+        if (!(weight > 0))
+        {
+            // Every star has a weight of zero, which is a way of saying they
+            // want nothing.  They keep their minimums.
+            foreach (i; 0 .. axis.count)
+            {
+                if (axis.sharesRemainder(i, available))
+                    axis.sizes[i] = axis.minAt(i);
+            }
+
+            return;
+        }
+
+        immutable remaining = available - taken > 0 ? available - taken : 0;
+
+        foreach (i; 0 .. axis.count)
+        {
+            if (!axis.sharesRemainder(i, available))
+                continue;
+
+            immutable share = remaining * axis.lengthAt(i).value / weight;
+            axis.sizes[i] = clampLength(share, axis.minAt(i), axis.maxAt(i));
+        }
+    }
+
+   /*
+    * The measure that counts: every child against the track it will really be
+    * given.
+    *
+    * A child already measured while its auto track was being grown is measured
+    * again here, because the offer is different -- infinity then, the settled
+    * size now.  Element.measure only repeats the work when the constraint has
+    * actually changed, so a child in a pixel cell is measured exactly once.
+    */
+    void measureChildren(ref Axis columns, ref Axis rows)
+    {
+        auto view = children;
+
+        foreach (i; 0 .. view.length)
+        {
+            auto child = view[i];
+
+            immutable ci = trackIndex(getColumn(child), columns.count);
+            immutable ri = trackIndex(getRow(child), rows.count);
+
+            child.measure(Size(columns.extentOf(ci), rows.extentOf(ri)));
+        }
+    }
+
+   /*
+    * Tells every definition how long it turned out to be.
+    *
+    * Written during arrange, which is safe because a definition is a
+    * StyledElement and not an Element: nothing about it invalidates a layout,
+    * so this cannot start the pass it is running inside over again.
+    */
+    void publishActualLengths()
+    {
+        foreach (i, definition; _columns)
+            definition.setActualLength(_columnSizes[i]);
+
+        foreach (i, definition; _rows)
+            definition.setActualLength(_rowSizes[i]);
+    }
+
+   /*
+    * The track a child asked for, pinned to one that exists.
+    *
+    * A count is never zero -- there is always the implicit track -- so this
+    * always names a real track.
+    */
+    static size_t trackIndex(int value, size_t count) pure nothrow @nogc
+    {
+        if (value <= 0)
+            return 0;
+
+        return cast(size_t) value >= count ? count - 1 : cast(size_t) value;
+    }
+
+    DefinitionBase[] _rows;
+    DefinitionBase[] _columns;
+    float[]          _rowSizes;
+    float[]          _columnSizes;
+}
+
+/*
+ * A length held between its bounds, with the maximum applied before the
+ * minimum -- the order Element.measure uses, and for the same reason: a minimum
+ * larger than the maximum is a contradiction, and the one the author wrote last
+ * is the one they meant.
+ */
+private float clampLength(float value, float min, float max) pure nothrow @nogc
+{
+    if (value > max)
+        value = max;
+    if (value < min)
+        value = min;
+
+    return value > 0 ? value : 0;
+}
+
+/// A cell index names a track, so it is not negative.
+private bool isUsableIndex(const(Value) value)
+{
+    return value.get!int >= 0;
+}
+
+/// A span covers at least the track it starts in.
+private bool isUsableSpan(const(Value) value)
+{
+    return value.get!int >= 1;
+}
+
 /*
  * A track's length is a length: not negative, not infinite, not NaN.
  *
@@ -444,4 +1047,272 @@ unittest
 
     // The actual length is the grid's answer and only the grid may write it.
     assert(DefinitionBase.actualLengthProperty.isReadOnly);
+}
+
+version (unittest)
+{
+    import cherry.platform.render : Thickness;
+
+   /*
+    * A child with a size of its own in both directions, pinned to the top left
+    * of whatever slot it is given.
+    *
+    * The pinning is not decoration.  An element that insists on both its width
+    * and its height cannot be stretched, so the default alignment centres it in
+    * its slot -- and a placement test written with an unpinned fixture reads the
+    * centring, calls it the grid, and passes for the wrong reason.  This has now
+    * caught four different tests in this framework; pinning it here is what
+    * stops it catching a fifth.
+    */
+    private static class Box : Element
+    {
+        this(float w, float h)
+        {
+            width = w;
+            height = h;
+            horizontalAlignment = HorizontalAlignment.left;
+            verticalAlignment = VerticalAlignment.top;
+        }
+    }
+
+   /*
+    * A child with no size of its own, which is what most things in a grid are:
+    * it takes the cell it is given.  Records what it was offered, which is the
+    * half of a measure a test cannot read off the element afterwards.
+    */
+    private static class Filler : Element
+    {
+        Size seenAvailable;
+
+        protected override Size measureOverride(Size availableSize)
+        {
+            seenAvailable = availableSize;
+            return Size(0, 0);
+        }
+    }
+
+    /// Measures and arranges in one go, so no test can forget the first half.
+    private void layOut(Element root, Size room)
+    {
+        root.measure(room);
+        root.arrange(Rect(0, 0, room.width, room.height));
+    }
+
+    /// A child in a cell, added and placed in one line.
+    private Element cell(Grid grid, Element child, int column, int row)
+    {
+        Grid.setColumn(child, column);
+        Grid.setRow(child, row);
+        grid.addChild(child);
+        return child;
+    }
+}
+
+unittest
+{
+    // The trap this whole design turns on: an attached property carries its
+    // flags to the child that was given it.
+    //
+    // Property.register puts the flags on the owner type, and a child resolves
+    // metadata through its own class chain, which never reaches Grid -- so
+    // without the override in the module constructor this fails, silently and
+    // only in the layout.
+    auto grid = new Grid;
+    auto child = new Box(40, 20);
+    grid.addChild(child);
+
+    grid.measure(Size(200, 100));
+    grid.arrange(Rect(0, 0, 200, 100));
+    assert(grid.isMeasureValid);
+
+    Grid.setRow(child, 1);
+    assert(!grid.isMeasureValid, "moving a child to another cell changes what the grid needs");
+
+    grid.measure(Size(200, 100));
+    assert(grid.isMeasureValid);
+
+    Grid.setColumnSpan(child, 2);
+    assert(!grid.isMeasureValid, "and so does covering more of it");
+}
+
+unittest
+{
+    import std.exception : assertThrown;
+
+    // A cell index names a track and a span covers at least one.
+    auto child = new Element;
+
+    assert(Grid.getRow(child) == 0 && Grid.getColumn(child) == 0);
+    assert(Grid.getRowSpan(child) == 1 && Grid.getColumnSpan(child) == 1);
+
+    Grid.setRow(child, 3);
+    assert(Grid.getRow(child) == 3);
+
+    assertThrown(Grid.setRow(child, -1));
+    assertThrown(Grid.setColumnSpan(child, 0));
+    assert(Grid.getRow(child) == 3, "and the refusals left it alone");
+}
+
+unittest
+{
+    // Pixel tracks are what they say, and the grid is their sum.
+    auto grid = new Grid;
+    grid.addColumn(GridLength(60));
+    grid.addColumn(GridLength(40));
+    grid.addRow(GridLength(30));
+
+    cell(grid, new Filler, 0, 0);
+    cell(grid, new Filler, 1, 0);
+
+    layOut(grid, Size(500, 400));
+
+    assert(grid.desiredSize == Size(100, 30));
+    assert(grid.column(0).actualWidth == 60 && grid.column(1).actualWidth == 40);
+    assert(grid.row(0).actualHeight == 30);
+}
+
+unittest
+{
+    // An auto track is as big as the biggest thing in it, and no bigger.
+    auto grid = new Grid;
+    grid.addColumn(GridLength.autoSize);
+    grid.addColumn(GridLength.autoSize);
+    grid.addRow(GridLength.autoSize);
+
+    auto narrow = cell(grid, new Box(30, 10), 0, 0);
+    auto wide = cell(grid, new Box(70, 25), 1, 0);
+
+    layOut(grid, Size(500, 400));
+
+    assert(grid.column(0).actualWidth == 30);
+    assert(grid.column(1).actualWidth == 70);
+    assert(grid.row(0).actualHeight == 25, "the taller of the two");
+    assert(grid.desiredSize == Size(100, 25));
+
+    // Each at its own size, in the cell it was given: the row is 25 tall
+    // because of the other one, and the short child does not grow to fill it --
+    // it is pinned to the top and has a height of its own.
+    assert(narrow.arrangedRect == Rect(0, 0, 30, 10));
+    assert(wide.arrangedRect == Rect(30, 0, 70, 25));
+}
+
+unittest
+{
+    // Stars divide what the others leave, by weight.
+    auto grid = new Grid;
+    grid.addColumn(GridLength(100));
+    grid.addColumn(GridLength.star(1));
+    grid.addColumn(GridLength.star(2));
+
+    foreach (i; 0 .. 3)
+        cell(grid, new Filler, cast(int) i, 0);
+
+    layOut(grid, Size(400, 50));
+
+    assert(grid.column(0).actualWidth == 100);
+    assert(grid.column(1).actualWidth == 100, "one part of the three hundred left");
+    assert(grid.column(2).actualWidth == 200, "and two");
+}
+
+unittest
+{
+    // A star with nothing to divide is an auto -- which is also what keeps the
+    // answer to an unbounded question finite.
+    auto grid = new Grid;
+    grid.addColumn(GridLength.star(1));
+    grid.addColumn(GridLength.star(1));
+
+    cell(grid, new Box(40, 10), 0, 0);
+    cell(grid, new Box(70, 10), 1, 0);
+
+    grid.measure(Size(float.infinity, float.infinity));
+
+    assert(grid.desiredSize == Size(110, 10), "each star took its content, and the sum is a number");
+}
+
+unittest
+{
+    // The room a grid is given is not always the room it asked for, and the
+    // difference belongs to the stars.
+    auto grid = new Grid;
+    grid.addColumn(GridLength(50));
+    grid.addColumn(GridLength.star(1));
+
+    auto fixed = cell(grid, new Filler, 0, 0);
+    auto stretchy = cell(grid, new Filler, 1, 0);
+
+    grid.measure(Size(200, 100));
+    assert(grid.column(1).length.isStar);
+
+    // Arranged into more room than the measure was given.
+    grid.arrange(Rect(0, 0, 400, 100));
+
+    assert(fixed.arrangedRect.width == 50, "the fixed track did not move");
+    assert(stretchy.arrangedRect == Rect(50, 0, 350, 100), "and the star took all of the rest");
+}
+
+unittest
+{
+    // A grid nobody described is a single cell, and the child fills it -- the
+    // same thing a plain Element does, so reaching for a Grid early costs
+    // nothing.
+    auto grid = new Grid;
+    auto child = new Filler;
+    grid.addChild(child);
+
+    layOut(grid, Size(300, 200));
+
+    assert(grid.rowCount == 0 && grid.columnCount == 0);
+    assert(child.arrangedRect == Rect(0, 0, 300, 200));
+    assert(child.seenAvailable == Size(300, 200));
+}
+
+unittest
+{
+    // A child put outside the grid is pinned to the last track rather than
+    // ending the program: a mistake worth seeing on the screen.
+    auto grid = new Grid;
+    grid.addColumn(GridLength(40));
+    grid.addColumn(GridLength(60));
+    grid.addRow(GridLength(20));
+
+    auto child = cell(grid, new Filler, 7, 3);
+
+    layOut(grid, Size(500, 400));
+
+    assert(child.arrangedRect == Rect(40, 0, 60, 20), "the last column and the only row");
+}
+
+unittest
+{
+    // Rows and columns are the same code pointed two ways, so the cheapest way
+    // to say they are not confused is to transpose a case and check it again.
+    auto grid = new Grid;
+    grid.addRow(GridLength(100));
+    grid.addRow(GridLength.star(1));
+    grid.addRow(GridLength.star(2));
+
+    foreach (i; 0 .. 3)
+        cell(grid, new Filler, 0, cast(int) i);
+
+    layOut(grid, Size(50, 400));
+
+    assert(grid.row(0).actualHeight == 100);
+    assert(grid.row(1).actualHeight == 100);
+    assert(grid.row(2).actualHeight == 200);
+}
+
+unittest
+{
+    // The definitions belong to the grid, which is what a binding written
+    // inside one will resolve against.
+    auto grid = new Grid;
+    auto column = grid.addColumn(GridLength(30));
+
+    assert(column.logicalParent is grid);
+    assert(grid.columnCount == 1 && grid.column(0) is column);
+
+    grid.clearColumns();
+    assert(grid.columnCount == 0);
+    assert(column.logicalParent is null, "and it is let go when the grid drops it");
 }
