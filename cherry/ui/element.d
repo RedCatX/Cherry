@@ -1308,12 +1308,19 @@ private:
     }
 
    /*
-    * Invokes this element's own handlers for the args' event, respecting
+    * Invokes the handlers this element runs for the args' event, respecting
     * the handled flag.  Iterates a snapshot of the handler list, so
     * handlers may add or remove handlers while the event is delivered.
+    *
+    * The class tier goes first, whatever this element's own list holds: what a
+    * control is made of does not queue up behind what somebody asked to hear
+    * about.  The early return below is under it for that reason -- an element
+    * nobody subscribed to still has a type, and the type may have plenty to say.
     */
     void invokeLocalHandlers(RoutedEventArgs args)
     {
+        invokeClassHandlers(this, args);
+
         auto list = args.routedEvent.id in _handlers;
         if (list is null)
             return;
