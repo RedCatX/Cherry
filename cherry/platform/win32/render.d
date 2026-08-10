@@ -112,7 +112,7 @@ private:
 
         createRenderingParams();
 
-        _context = new D2DDrawingContext(_target, _brush, _displayParams, _idealParams);
+        _context = new D2DDrawingContext(_factory, _target, _brush, _displayParams, _idealParams);
     }
 
    /*
@@ -158,11 +158,12 @@ private:
 
     void releaseTarget()
     {
-        // Before the context goes: every gradient it cached belongs to this
-        // target and dies with it.  A cache that outlived the device would hand
-        // out brushes built against a device that no longer exists.
+        // Before the context goes, so that what it cached is released rather
+        // than merely dropped.  The gradients must go in any case: they are
+        // built against a target that is about to stop existing, and a cache
+        // outliving the device would hand out brushes made for a dead one.
         if (_context !is null)
-            _context.releaseGradients();
+            _context.releaseCaches();
 
         _context = null;
 
@@ -206,9 +207,12 @@ private:
  */
 private final class D2DDrawingContext : DrawingContext
 {
-    this(ID2D1RenderTarget target, ID2D1SolidColorBrush brush,
+    this(ID2D1Factory factory, ID2D1RenderTarget target, ID2D1SolidColorBrush brush,
          IDWriteRenderingParams displayParams, IDWriteRenderingParams idealParams)
     {
+        // The factory is here for the stroke styles and nothing else: they are
+        // the one thing this draws with that a target does not make.
+        _factory = factory;
         _target = target;
         _brush = brush;
         _displayParams = displayParams;
@@ -414,13 +418,111 @@ private:
    /*
     * The Direct2D object describing the shape of a stroke, or null for the
     * plain one -- which is not a failure but the fast answer: null is exactly
-    * how Direct2D spells "solid, flat ends, mitred corners".
+    * how Direct2D spells "solid, flat ends, mitred corners", so the stroke
+    * almost everything draws costs nothing at all here.
     *
-    * Shapes other than the plain one are not built yet.
+    * Cached by the shape and not by the caller, because a shape is a handful of
+    * enum members and every control drawing a dotted line wants the same one.
+    * Neither the colour nor the width is part of it -- Direct2D takes the width
+    * as an argument to the draw, and the paint never reaches this at all.
+    *
+    * A shape carrying a number that is not finite gets the plain style rather
+    * than an object of its own: Direct2D would refuse it, and an unusable key
+    * would miss the cache on every lookup and build one per draw forever.
     */
-    void* deviceStrokeStyle(Stroke stroke)
+    ID2D1StrokeStyle deviceStrokeStyle(Stroke stroke)
     {
-        return null;
+        if (stroke.hasPlainShape)
+            return null;
+
+        if (!isFinite(stroke.miterLimit) || !isFinite(stroke.dashOffset))
+            return null;
+
+        immutable shape = StrokeShape(stroke);
+
+        if (auto cached = shape in _strokeStyles)
+            return *cached;
+
+        auto properties = D2D1_STROKE_STYLE_PROPERTIES(
+            toCapStyle(stroke.startCap),
+            toCapStyle(stroke.endCap),
+            toCapStyle(stroke.dashCap),
+            toLineJoin(stroke.lineJoin),
+            stroke.miterLimit,
+            toDashStyle(stroke.dashStyle),
+            stroke.dashOffset);
+
+        ID2D1StrokeStyle style;
+        if (_factory.CreateStrokeStyle(&properties, null, 0, &style) != S_OK)
+            return null;
+
+        _strokeStyles[shape] = style;
+        return style;
+    }
+
+    static bool isFinite(float value) pure nothrow @nogc
+    {
+        return value == value && value > -float.infinity && value < float.infinity;
+    }
+
+    static int toCapStyle(LineCap cap) pure nothrow @nogc
+    {
+        final switch (cap)
+        {
+            case LineCap.flat:     return D2D1_CAP_STYLE_FLAT;
+            case LineCap.square:   return D2D1_CAP_STYLE_SQUARE;
+            case LineCap.round:    return D2D1_CAP_STYLE_ROUND;
+            case LineCap.triangle: return D2D1_CAP_STYLE_TRIANGLE;
+        }
+    }
+
+    static int toLineJoin(LineJoin join) pure nothrow @nogc
+    {
+        final switch (join)
+        {
+            case LineJoin.miter:        return D2D1_LINE_JOIN_MITER;
+            case LineJoin.bevel:        return D2D1_LINE_JOIN_BEVEL;
+            case LineJoin.round:        return D2D1_LINE_JOIN_ROUND;
+            case LineJoin.miterOrBevel: return D2D1_LINE_JOIN_MITER_OR_BEVEL;
+        }
+    }
+
+    static int toDashStyle(DashStyle dash) pure nothrow @nogc
+    {
+        final switch (dash)
+        {
+            case DashStyle.solid:      return D2D1_DASH_STYLE_SOLID;
+            case DashStyle.dash:       return D2D1_DASH_STYLE_DASH;
+            case DashStyle.dot:        return D2D1_DASH_STYLE_DOT;
+            case DashStyle.dashDot:    return D2D1_DASH_STYLE_DASH_DOT;
+            case DashStyle.dashDotDot: return D2D1_DASH_STYLE_DASH_DOT_DOT;
+        }
+    }
+
+   /*
+    * A stroke with what colours it and how thick it is taken away: what is
+    * left is what Direct2D calls a stroke style, and what this caches by.
+    */
+    static struct StrokeShape
+    {
+        DashStyle dashStyle;
+        LineCap   startCap;
+        LineCap   endCap;
+        LineCap   dashCap;
+        LineJoin  lineJoin;
+        float     miterLimit;
+        float     dashOffset;
+
+        this(Stroke stroke) pure nothrow @nogc
+        {
+            dashStyle = stroke.dashStyle;
+            startCap = stroke.startCap;
+            endCap = stroke.endCap;
+            dashCap = stroke.dashCap;
+            lineJoin = stroke.lineJoin;
+            miterLimit = stroke.miterLimit;
+            dashOffset = stroke.dashOffset;
+        }
     }
 
    /*
@@ -515,13 +617,27 @@ private:
         }
     }
 
-    /// Lets the renderer drop every device resource when the target goes.
-    void releaseGradients()
+   /**
+    * Lets the renderer drop everything this context has cached when the target
+    * goes.
+    *
+    * The gradients have to go: they are device resources built against a target
+    * that is about to stop existing.  The stroke styles do not -- they belong to
+    * the factory and would happily outlive it -- but the cache holding them
+    * dies with this context, so they are released here or not at all.  Rebuilt
+    * next frame, and there are only ever a handful.
+    */
+    void releaseCaches()
     {
         foreach (entry; _gradients)
             entry.brush.Release();
 
         _gradients = null;
+
+        foreach (style; _strokeStyles)
+            style.Release();
+
+        _strokeStyles = null;
     }
 
    /*
@@ -591,12 +707,14 @@ private:
         ulong                    revision;
     }
 
-    ID2D1RenderTarget      _target;
-    ID2D1SolidColorBrush   _brush;
-    IDWriteRenderingParams _displayParams;
-    IDWriteRenderingParams _idealParams;
-    CachedGradient[Object] _gradients;
-    TransformStack         _transforms;
+    ID2D1Factory              _factory;
+    ID2D1RenderTarget         _target;
+    ID2D1SolidColorBrush      _brush;
+    IDWriteRenderingParams    _displayParams;
+    IDWriteRenderingParams    _idealParams;
+    CachedGradient[Object]    _gradients;
+    ID2D1StrokeStyle[StrokeShape] _strokeStyles;
+    TransformStack            _transforms;
 
     // Which mode's parameters the target is carrying, or -1 for "not yet
     // said".  An int rather than the enum, because "none of them" is a state

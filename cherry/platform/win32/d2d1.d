@@ -47,6 +47,23 @@ enum D2D1_EXTEND_MODE_CLAMP  = 0;
 enum D2D1_EXTEND_MODE_WRAP   = 1;
 enum D2D1_EXTEND_MODE_MIRROR = 2;
 
+enum D2D1_CAP_STYLE_FLAT     = 0;
+enum D2D1_CAP_STYLE_SQUARE   = 1;
+enum D2D1_CAP_STYLE_ROUND    = 2;
+enum D2D1_CAP_STYLE_TRIANGLE = 3;
+
+enum D2D1_LINE_JOIN_MITER          = 0;
+enum D2D1_LINE_JOIN_BEVEL          = 1;
+enum D2D1_LINE_JOIN_ROUND          = 2;
+enum D2D1_LINE_JOIN_MITER_OR_BEVEL = 3;
+
+enum D2D1_DASH_STYLE_SOLID        = 0;
+enum D2D1_DASH_STYLE_DASH         = 1;
+enum D2D1_DASH_STYLE_DOT          = 2;
+enum D2D1_DASH_STYLE_DASH_DOT     = 3;
+enum D2D1_DASH_STYLE_DASH_DOT_DOT = 4;
+enum D2D1_DASH_STYLE_CUSTOM       = 5;
+
 enum HRESULT D2DERR_RECREATE_TARGET = 0x8899000C;
 
 alias D2D1_TAG = ulong;
@@ -136,6 +153,17 @@ struct D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES
     D2D1_POINT_2F endPoint;
 }
 
+struct D2D1_STROKE_STYLE_PROPERTIES
+{
+    int   startCap;     // D2D1_CAP_STYLE
+    int   endCap;       // D2D1_CAP_STYLE
+    int   dashCap;      // D2D1_CAP_STYLE
+    int   lineJoin;     // D2D1_LINE_JOIN
+    float miterLimit = 10;
+    int   dashStyle;    // D2D1_DASH_STYLE
+    float dashOffset = 0;
+}
+
 // ----------------------------------------------------------------- GUIDs --
 
 immutable IID IID_ID2D1Factory =
@@ -147,6 +175,19 @@ interface ID2D1Resource : IUnknown
 {
 extern (Windows):
     void GetFactory(void** factory);
+}
+
+/**
+ * The shape of a stroke -- its ends, its corners and its dashes -- with no
+ * colour and no width, which are given to each drawing call instead.
+ *
+ * A factory resource and not a device one, so it outlives a lost render target;
+ * only the cache holding it is tied to a target's lifetime.  None of its own
+ * methods are ever called, so none are declared: what the renderer needs is a
+ * pointer to hand back to a draw.
+ */
+interface ID2D1StrokeStyle : ID2D1Resource
+{
 }
 
 interface ID2D1Brush : ID2D1Resource
@@ -224,17 +265,17 @@ extern (Windows):
     HRESULT CreateLayer(const(D2D1_SIZE_F)* size, void** layer);
     HRESULT CreateMesh(void** mesh);
     void DrawLine(D2D1_POINT_2F point0, D2D1_POINT_2F point1, ID2D1Brush brush,
-                  float strokeWidth, void* strokeStyle);
+                  float strokeWidth, ID2D1StrokeStyle strokeStyle);
     void DrawRectangle(const(D2D1_RECT_F)* rect, ID2D1Brush brush,
-                       float strokeWidth, void* strokeStyle);
+                       float strokeWidth, ID2D1StrokeStyle strokeStyle);
     void FillRectangle(const(D2D1_RECT_F)* rect, ID2D1Brush brush);
     void DrawRoundedRectangle(const(D2D1_ROUNDED_RECT)* roundedRect, ID2D1Brush brush,
-                              float strokeWidth, void* strokeStyle);
+                              float strokeWidth, ID2D1StrokeStyle strokeStyle);
     void FillRoundedRectangle(const(D2D1_ROUNDED_RECT)* roundedRect, ID2D1Brush brush);
     void DrawEllipse(const(D2D1_ELLIPSE)* ellipse, ID2D1Brush brush,
-                     float strokeWidth, void* strokeStyle);
+                     float strokeWidth, ID2D1StrokeStyle strokeStyle);
     void FillEllipse(const(D2D1_ELLIPSE)* ellipse, ID2D1Brush brush);
-    void DrawGeometry(void* geometry, ID2D1Brush brush, float strokeWidth, void* strokeStyle);
+    void DrawGeometry(void* geometry, ID2D1Brush brush, float strokeWidth, ID2D1StrokeStyle strokeStyle);
     void FillGeometry(void* geometry, ID2D1Brush brush, ID2D1Brush opacityBrush);
     void FillMesh(void* mesh, ID2D1Brush brush);
     void FillOpacityMask(void* opacityMask, ID2D1Brush brush, int content,
@@ -297,7 +338,9 @@ extern (Windows):
     HRESULT CreateGeometryGroup(int fillMode, void** geometries, uint geometriesCount, void** geometryGroup);
     HRESULT CreateTransformedGeometry(void* sourceGeometry, const(D2D1_MATRIX_3X2_F)* transform, void** transformedGeometry);
     HRESULT CreatePathGeometry(void** pathGeometry);
-    HRESULT CreateStrokeStyle(const(void)* strokeStyleProperties, const(float)* dashes, uint dashesCount, void** strokeStyle);
+    HRESULT CreateStrokeStyle(const(D2D1_STROKE_STYLE_PROPERTIES)* strokeStyleProperties,
+                              const(float)* dashes, uint dashesCount,
+                              ID2D1StrokeStyle* strokeStyle);
     HRESULT CreateDrawingStateBlock(const(void)* drawingStateDescription, void* textRenderingParams, void** drawingStateBlock);
     HRESULT CreateWicBitmapRenderTarget(void* target, const(D2D1_RENDER_TARGET_PROPERTIES)* renderTargetProperties, void** renderTarget);
     HRESULT CreateHwndRenderTarget(const(D2D1_RENDER_TARGET_PROPERTIES)* renderTargetProperties,

@@ -663,6 +663,12 @@ unittest
  * five.  A pattern of one's own -- an array of lengths -- is deliberately not
  * here: it would put an array inside a struct that has to stay cheap to copy
  * and cheap to compare, and nothing wants one yet.
+ *
+ * **A dot is a dash of zero length**, in every one of these systems, so a dot
+ * drawn with a flat dashCap has no extent and nothing appears at all.  Dots
+ * want `LineCap.round` or `LineCap.square`.  Verified against Direct2D rather
+ * than assumed, and it is the first thing to check when a dotted line comes out
+ * blank.
  */
 enum DashStyle
 {
