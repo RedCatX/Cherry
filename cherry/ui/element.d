@@ -95,6 +95,33 @@ class Element : Visual
 
         isMouseOverKey = Property.registerReadOnly("IsMouseOver", getRtti!bool(), getRtti!Element(), mouseOverMeta);
 
+        // False, so that the elements the keyboard walks are the ones that were
+        // built to be walked.  Every container between a control and the window
+        // is an Element, and a Tab that stopped on each of them would be a Tab
+        // nobody could use; Control turns it on for itself.  WPF's
+        // UIElement.Focusable defaults to false for the same reason.
+        PropertyMetadata focusableMeta;
+        focusableMeta.defaultValue = Value(false);
+
+        focusableProperty = Property.register("Focusable", getRtti!bool(), getRtti!Element(), focusableMeta);
+
+        // True, because a focusable element that Tab skips is the exception --
+        // something reachable by clicking or by code but deliberately out of
+        // the walk, like a scroll viewer or the drawing area of an editor.
+        PropertyMetadata tabStopMeta;
+        tabStopMeta.defaultValue = Value(true);
+
+        isTabStopProperty = Property.register("IsTabStop", getRtti!bool(), getRtti!Element(), tabStopMeta);
+
+        // No affectsRender, exactly as IsMouseOver carries none: the element
+        // that draws a focus ring says so itself.  Every ancestor of the
+        // focused element is not marked at all -- that is IsFocusWithin, which
+        // needs the chain diff hover already has and is its own piece of work.
+        PropertyMetadata focusedMeta;
+        focusedMeta.defaultValue = Value(false);
+
+        isFocusedKey = Property.registerReadOnly("IsFocused", getRtti!bool(), getRtti!Element(), focusedMeta);
+
         // Space the element keeps clear around itself, and therefore part of
         // what it costs its parent: a margin changes the answer measure gives,
         // not merely where arrange puts things.
@@ -154,6 +181,8 @@ class Element : Visual
     static immutable(Property) maxHeightProperty;
     static immutable(Property) horizontalAlignmentProperty;
     static immutable(Property) verticalAlignmentProperty;
+    static immutable(Property) focusableProperty;
+    static immutable(Property) isTabStopProperty;
     static immutable(RoutedEvent) sizeChangedEvent;
 
    /**
@@ -192,6 +221,69 @@ class Element : Visual
     @property bool isMouseOver() const
     {
         return getValue(isMouseOverProperty).get!bool;
+    }
+
+   /**
+    * Whether this element can take the keyboard at all.
+    *
+    * Off by default and turned on by the things that are worth typing into --
+    * a plain Element is a piece of structure, and structure does not take
+    * keys.  Turning it off on something that has the keyboard does not take it
+    * away; what it stops is the next attempt to give it.
+    */
+    @property bool focusable() const
+    {
+        return getValue(focusableProperty).get!bool;
+    }
+
+    /// ditto
+    @property void focusable(bool value)
+    {
+        setValue(focusableProperty, Value(value));
+    }
+
+   /**
+    * Whether the walk from key to key stops here.
+    *
+    * Separate from focusable because the two really are different: this is
+    * about the tour Tab takes, not about whether the element can be typed
+    * into.  Something reachable by clicking but skipped by Tab sets this
+    * false; something Tab cannot reach because it takes no keys at all is not
+    * focusable in the first place.
+    */
+    @property bool isTabStop() const
+    {
+        return getValue(isTabStopProperty).get!bool;
+    }
+
+    /// ditto
+    @property void isTabStop(bool value)
+    {
+        setValue(isTabStopProperty, Value(value));
+    }
+
+   /**
+    * Whether the keyboard is on this element.
+    *
+    * True on exactly one element of a window at a time, and on none of its
+    * ancestors -- unlike IsMouseOver, which is true all the way up.  The two
+    * differ because the questions do: the pointer is somewhere, and everything
+    * containing that somewhere contains it, whereas the keyboard is *at* one
+    * element and nowhere else.  What a container wants instead is
+    * IsFocusWithin, which does not exist yet.
+    *
+    * Read-only, and the key never leaves this class: which element has the
+    * keyboard is the window's to decide, and focus() is how to ask.
+    */
+    static @property immutable(Property) isFocusedProperty() pure nothrow
+    {
+        return isFocusedKey.property;
+    }
+
+    /// ditto
+    @property bool isFocused() const
+    {
+        return getValue(isFocusedProperty).get!bool;
     }
 
    /**
@@ -1046,6 +1138,52 @@ class Element : Visual
     }
 
    /**
+    * Asks for the keyboard, and says whether it was given.
+    *
+    * The same shape as captureMouse and for the same reason: which element the
+    * typing goes to is something a surface decides, so the request travels to
+    * the top of the tree and Window answers it.  An element in no window has
+    * nowhere to ask and is refused.
+    *
+    * Refused for an element that is not focusable.  Granted, and cheap, for one
+    * that already has the keyboard: the answer is about the state asked for,
+    * not about whether anything had to change to reach it.
+    */
+    bool focus()
+    {
+        return root.focusAsRoot(this);
+    }
+
+   /**
+    * Gives the keyboard up, if this element has it.
+    *
+    * Nothing is focused afterwards, rather than the focus moving somewhere
+    * sensible: choosing where it should go instead is a policy, and a policy
+    * needs a focus scope to have an opinion.  Calling this on an element that
+    * does not have the keyboard does nothing at all.
+    */
+    void unfocus()
+    {
+        root.clearFocusAsRoot(this);
+    }
+
+   /**
+    * Gives the keyboard to an element below, or takes it back.
+    *
+    * The default refuses, which is the right answer for a tree with no surface
+    * under it: there is no keyboard to give.  Window overrides both.
+    */
+    bool focusAsRoot(Element target)
+    {
+        return false;
+    }
+
+    /// ditto
+    void clearFocusAsRoot(Element target)
+    {
+    }
+
+   /**
     * Takes or gives up the pointer on behalf of an element below.
     *
     * The default does nothing, which is the right answer for a tree with no
@@ -1081,6 +1219,18 @@ package:
     void setMouseOver(bool value)
     {
         setValue(isMouseOverKey, Value(value));
+    }
+
+   /*
+    * Records that the keyboard is or is not on this element.
+    *
+    * The write side of isFocused, kept the same way and for the same reason as
+    * setMouseOver: the surface decides who has the keyboard, and possession of
+    * the key is the permission to say so.
+    */
+    void setFocused(bool value)
+    {
+        setValue(isFocusedKey, Value(value));
     }
 
    /*
@@ -1446,6 +1596,7 @@ private:
     static immutable(ReadOnlyPropertyKey) actualWidthKey;
     static immutable(ReadOnlyPropertyKey) actualHeightKey;
     static immutable(ReadOnlyPropertyKey) isMouseOverKey;
+    static immutable(ReadOnlyPropertyKey) isFocusedKey;
 
     Element              _parent;
     Element[]            _children;
@@ -2914,4 +3065,92 @@ unittest
     assert(e.isMeasureValid, "but it is the same size");
     assert(e.isArrangeValid, "and in the same place");
     assert(parent.isVisualValid, "and its parent did not change at all");
+}
+
+unittest
+{
+    // What an element says about the keyboard before anything has given it any.
+    auto e = new Element;
+
+    assert(!e.focusable, "structure does not take keys");
+    assert(e.isTabStop, "but if it ever takes them, Tab stops on it");
+    assert(!e.isFocused);
+    assert(Element.isFocusedProperty.isReadOnly,
+           "user code reports on the keyboard, never moves it");
+
+    // Asking with nothing above to ask is refused rather than pretended.
+    e.focusable = true;
+    assert(!e.focus(), "an element in no window has nowhere to ask");
+    assert(!e.isFocused);
+}
+
+unittest
+{
+    // The request travels to the root, and the root is the one that answers --
+    // the same shape the capture uses, so that element.d never names a window.
+    static class Surface : Element
+    {
+        Element focused;
+        Element released;
+
+        override bool focusAsRoot(Element target)
+        {
+            if (target is null || !target.focusable)
+                return false;
+
+            if (focused !is null)
+                focused.setFocused(false);
+
+            focused = target;
+            target.setFocused(true);
+            return true;
+        }
+
+        override void clearFocusAsRoot(Element target)
+        {
+            if (focused !is target)
+                return;
+
+            released = target;
+            focused.setFocused(false);
+            focused = null;
+        }
+    }
+
+    auto surface = new Surface;
+    auto first = new Element;
+    auto second = new Element;
+    auto structure = new Element;
+
+    surface.addChild(structure);
+    structure.addChild(first);
+    structure.addChild(second);
+
+    first.focusable = true;
+    second.focusable = true;
+
+    // From any depth: what answers is the root, not the parent.
+    assert(first.focus());
+    assert(first.isFocused && surface.focused is first);
+
+    assert(second.focus());
+    assert(second.isFocused);
+    assert(!first.isFocused, "one element at a time, and the old one is told");
+
+    // Nothing in between is marked -- that is the difference from IsMouseOver,
+    // which is true all the way up.
+    assert(!structure.isFocused && !surface.isFocused);
+
+    // Something that cannot take the keyboard does not get it, and does not
+    // take it away from whoever has it either.
+    assert(!structure.focus());
+    assert(second.isFocused, "a refused request changes nothing");
+
+    second.unfocus();
+    assert(!second.isFocused && surface.focused is null);
+    assert(surface.released is second);
+
+    // Giving up something already given up is not an error.
+    second.unfocus();
+    assert(surface.focused is null);
 }
