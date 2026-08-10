@@ -209,6 +209,13 @@ void main()
     // an alignment nobody set means.
     auto button = new HelloButton("Compare");
     button.margin = Thickness(0, 10, 0, 0);
+
+    // Enter presses it from anywhere in the window -- unless whatever has the
+    // keyboard wants Enter for itself, which is the whole of what "default"
+    // means.  Tab walks between the two buttons and each draws a ring while it
+    // has the keyboard; Space presses the focused one on the way up, so it can
+    // still be taken back by Tabbing away before letting go.
+    button.isDefault = true;
     stripes.addChild(button);
 
     button.onClick ~= (Element sender, RoutedEventArgs args) {
@@ -218,6 +225,15 @@ void main()
         // box next to the line along the bottom of the window and look at the
         // letter shapes and the spacing.
         showMessage("Cherry", sample, MessageKind.information);
+    };
+
+    auto close = new HelloButton("Close");
+    close.margin = Thickness(0, 6, 0, 0);
+    close.isCancel = true;
+    stripes.addChild(close);
+
+    close.onClick ~= (Element sender, RoutedEventArgs args) {
+        window.close();
     };
 
     window.addChild(stripes);
