@@ -33,18 +33,21 @@ import cherry.ui.input;
  * of having no content model, and the first thing a ContentPresenter will take
  * over.
  *
- * **It marks MouseDown and MouseUp as handled**, because a press on a button is
- * not also a press on whatever the button sits in.  The consequence catches
- * people out: a handled event skips every handler after it on the same
- * element, and this class subscribes its own in its constructor -- so a handler
- * added to a button's MouseDown afterwards never runs.  WPF's ButtonBase does
- * exactly this and answers it the same way: watch IsPressed and IsMouseOver, or
- * use Click.  Both are properties, so both report through onPropertyChanged,
- * which is where a style trigger will hang when there are styles.
+ * **The behaviour is class handling**: it overrides Element's handleMouseXxx
+ * hooks rather than subscribing to its own events, so that none of it stands in
+ * the queue the code using a button subscribes to.  Nothing here can be
+ * unsubscribed, reordered, or run at a moment that depends on when somebody
+ * else happened to subscribe.
  *
- * (What WPF has and this does not is a class-handler tier, which would let the
- * control handle an event without standing in the instance handlers' queue.
- * Worth adding the day something needs to listen ahead of a control.)
+ * **It marks MouseDown and MouseUp as handled**, because a press on a button is
+ * not also a press on whatever the button sits in -- and that still has a
+ * consequence worth knowing.  A handled event skips the handlers after it on
+ * the same element, and the class tier runs before all of them, so a handler
+ * added to a button's MouseDown does not run at all unless it was added with
+ * handledEventsToo.  WPF's ButtonBase behaves the same way and answers it the
+ * same way: watch IsPressed and IsMouseOver, or use Click.  Both are
+ * properties, so both report through onPropertyChanged, which is where a style
+ * trigger will hang when there are styles.
  *
  * Not here yet: the keyboard.  Space and Enter do not press it, there is no
  * focus to give it, and IsDefault and IsCancel have nothing to hang off.
@@ -128,18 +131,13 @@ class Button : Control
         _label.horizontalAlignment = HorizontalAlignment.center;
         _label.verticalAlignment = VerticalAlignment.center;
         addChild(_label);
-
-        this.onMouseDown ~= &handleMouseDown;
-        this.onMouseUp ~= &handleMouseUp;
-        this.onMouseMove ~= &handleMouseMove;
-        this.onMouseEnter ~= &handleMouseCrossing;
-        this.onMouseLeave ~= &handleMouseCrossing;
-        this.onMouseCaptureLost ~= &handleCaptureLost;
     }
 
-private:
-    void handleMouseDown(Element sender, RoutedEventArgs args)
+protected:
+    override void handleMouseDown(RoutedEventArgs args)
     {
+        super.handleMouseDown(args);
+
         auto mouse = cast(MouseEventArgs) args;
         if (mouse is null || mouse.button != MouseButton.left)
             return;
@@ -155,8 +153,10 @@ private:
         args.handled = true;
     }
 
-    void handleMouseUp(Element sender, RoutedEventArgs args)
+    override void handleMouseUp(RoutedEventArgs args)
     {
+        super.handleMouseUp(args);
+
         auto mouse = cast(MouseEventArgs) args;
         if (mouse is null || mouse.button != MouseButton.left)
             return;
@@ -175,8 +175,10 @@ private:
             raiseEvent(new RoutedEventArgs(clickEvent));
     }
 
-    void handleMouseMove(Element sender, RoutedEventArgs args)
+    override void handleMouseMove(RoutedEventArgs args)
     {
+        super.handleMouseMove(args);
+
         // Only while holding the pointer, and then only to follow it: pressed
         // means "the pointer is down and still on me", and isMouseOver keeps
         // saying where it really is even under a capture.
@@ -184,7 +186,30 @@ private:
             setPressed(isMouseOver);
     }
 
-    void handleMouseCrossing(Element sender, RoutedEventArgs args)
+    override void handleMouseEnter(RoutedEventArgs args)
+    {
+        super.handleMouseEnter(args);
+        crossedTheEdge();
+    }
+
+    override void handleMouseLeave(RoutedEventArgs args)
+    {
+        super.handleMouseLeave(args);
+        crossedTheEdge();
+    }
+
+    override void handleMouseCaptureLost(RoutedEventArgs args)
+    {
+        super.handleMouseCaptureLost(args);
+
+        // The system takes the pointer away for reasons of its own -- a task
+        // switch, a menu, another window.  Without this the button would be
+        // left looking pressed with nothing able to release it.
+        setPressed(false);
+    }
+
+private:
+    void crossedTheEdge()
     {
         // Crossing the edge with the button held is the case this exists for.
         // Crossing it otherwise changes nothing, because pressed is false
@@ -194,14 +219,6 @@ private:
             setPressed(isMouseOver);
 
         invalidateVisual();
-    }
-
-    void handleCaptureLost(Element sender, RoutedEventArgs args)
-    {
-        // The system takes the pointer away for reasons of its own -- a task
-        // switch, a menu, another window.  Without this the button would be
-        // left looking pressed with nothing able to release it.
-        setPressed(false);
     }
 
     void setPressed(bool value)
@@ -391,10 +408,10 @@ unittest
 unittest
 {
     // What an appearance has to hang off, and why it cannot be the mouse
-    // events: the button handles those and marks them handled, so a handler
-    // added afterwards on the same element never runs.  IsPressed and
-    // IsMouseOver report through onPropertyChanged instead, and they report
-    // every change.
+    // events: the button class-handles those and marks them handled, and the
+    // class tier runs before the queue, so a handler on the same element never
+    // runs at all.  IsPressed and IsMouseOver report through onPropertyChanged
+    // instead, and they report every change.
     static class Watcher : Button
     {
         string[] seen;
@@ -436,8 +453,38 @@ unittest
            "every crossing and every press, in the order they happened");
 
     assert(afterwards == 0,
-           "and the handler added after the button's own never saw the press -- "
+           "and the handler on the button never saw the press -- "
            ~ "which is why an appearance must not be hung off these events");
+}
+
+unittest
+{
+    // Where the button's behaviour actually lives now: not in the queue.
+    //
+    // A handler asking for handled events too runs, and finds the press already
+    // dealt with -- press taken, pointer captured, event claimed -- before it
+    // was ever given a turn.  That is the class tier: the control does not
+    // queue up behind the code using it, and does not make that code wait
+    // behind the control either.
+    auto b = bench();
+
+    bool ran;
+    bool alreadyHandled;
+    bool alreadyPressed;
+
+    b.button.addEventHandler(mouseDownEvent,
+        (Element sender, RoutedEventArgs args) {
+            ran = true;
+            alreadyHandled = args.handled;
+            alreadyPressed = (cast(Button) sender).isPressed;
+        }, true);
+
+    b.window.platform.host.onMouseMove(50, 20);
+    b.window.platform.host.onMouseDown(MouseButton.left, 50, 20);
+
+    assert(ran, "handledEventsToo is the way in");
+    assert(alreadyHandled, "and it arrives after the button has claimed the press");
+    assert(alreadyPressed);
 }
 
 unittest
