@@ -27,6 +27,78 @@ enum MouseButton
 }
 
 /**
+ * A key, named by **where it is** rather than by what it types.
+ *
+ * That distinction is the whole design.  `Key.a` is the key a US layout has an
+ * A on, and it stays `Key.a` on a French keyboard where it types Q -- because
+ * what a shortcut wants to know is which key was struck, and what an editor
+ * wants to know is what was typed.  The second question is answered by
+ * onTextInput, which arrives after the layout, the modifiers and any dead keys
+ * have all had their say.  Anything that reads a character out of a Key is
+ * asking the wrong one of the two.
+ *
+ * The OEM members are named after the US layout for want of a better name, and
+ * mean nothing but a position anywhere else.
+ *
+ * A backend reports `unknown` for a key it does not model rather than
+ * inventing one, so a handler can tell "a key we have no name for" from any
+ * particular key.
+ *
+ * Left and right modifiers are not told apart: Windows does not distinguish
+ * them without being asked, and nothing needs it yet.
+ */
+enum Key
+{
+    unknown,
+
+    a, b, c, d, e, f, g, h, i, j, k, l, m,
+    n, o, p, q, r, s, t, u, v, w, x, y, z,
+
+    /// The digit row, above the letters.
+    d0, d1, d2, d3, d4, d5, d6, d7, d8, d9,
+
+    /// The numeric keypad, which is a different set of keys entirely.
+    numPad0, numPad1, numPad2, numPad3, numPad4,
+    numPad5, numPad6, numPad7, numPad8, numPad9,
+    multiply, add, subtract, decimal, divide,
+
+    f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12,
+    f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23, f24,
+
+    back, tab, enter, escape, space,
+    pageUp, pageDown, end, home,
+    left, up, right, down,
+    insert,
+    /// Trailing underscore because `delete` is a reserved word in D.
+    delete_,
+
+    capsLock, numLock, scrollLock, printScreen, pause,
+
+    shift, control, alt,
+    leftWindows, rightWindows, apps,
+
+    oemSemicolon, oemPlus, oemComma, oemMinus, oemPeriod, oemQuestion,
+    oemTilde, oemOpenBrackets, oemPipe, oemCloseBrackets, oemQuotes,
+    oemBackslash
+}
+
+/**
+ * Which of the modifier keys were held when something happened.
+ *
+ * A bit field, because they combine: `(modifiers & ModifierKeys.control) != 0`
+ * is the question to ask, and testing for equality against a single member is
+ * the mistake -- Ctrl+Shift+S is not Ctrl+S with something extra to ignore.
+ */
+enum ModifierKeys
+{
+    none    = 0,
+    shift   = 1,
+    control = 2,
+    alt     = 4,
+    windows = 8
+}
+
+/**
  * Receives normalized notifications from a platform window.  Implemented by
  * the framework's Window; platform code is a dumb driver that only reports
  * what happened -- all policy (closing behavior, routing, hit-testing)
