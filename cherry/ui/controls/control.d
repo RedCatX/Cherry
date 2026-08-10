@@ -9,9 +9,13 @@ module cherry.ui.controls.control;
 import cherry.core.property;
 import cherry.core.rtti;
 import cherry.core.value;
-import cherry.platform.render : DrawingContext, Rect, Size, Stroke, Thickness;
+import cherry.platform.render : Color, DashStyle, DrawingContext, LineCap, Rect,
+                                Size, Stroke, Thickness;
 import cherry.ui.element;
-import cherry.ui.media.brush : Brush;
+import cherry.ui.event : RoutedEventArgs;
+import cherry.ui.input : MouseButton, MouseEventArgs;
+import cherry.ui.media.brush : Brush, SolidColorBrush;
+import cherry.ui.media.pen : Pen;
 
 /**
  * The base of the things a user works with: something with a surface of its
@@ -72,6 +76,25 @@ class Control : Element
 
         cornerRadiusProperty = Property.register("CornerRadius",
             getRtti!float(), getRtti!Control(), radiusMeta, &isUsableRadius);
+
+        // What a control is for: being used.  Element says no because most of
+        // the tree is structure and a Tab stopping on every panel would be a
+        // Tab nobody could use; from here down the answer is yes, which is
+        // exactly the division WPF draws between UIElement and Control.
+        PropertyMetadata focusableMeta;
+        focusableMeta.defaultValue = Value(true);
+
+        focusableProperty.overrideMetadata(getRtti!Control(), focusableMeta);
+
+        // Unset means the plain ring, made per element when it is first needed
+        // -- the same rule as the brushes above, and forced by the same thing:
+        // a Pen is a CherryObject and a module constructor cannot build one.
+        PropertyMetadata penMeta;
+        penMeta.defaultValue = Value.init;
+        penMeta.affectsRender = true;
+
+        focusPenProperty = Property.register("FocusPen",
+            getRtti!Pen(), getRtti!Control(), penMeta);
     }
 
     static immutable(Property) backgroundProperty;
@@ -79,6 +102,28 @@ class Control : Element
     static immutable(Property) borderThicknessProperty;
     static immutable(Property) paddingProperty;
     static immutable(Property) cornerRadiusProperty;
+    static immutable(Property) focusPenProperty;
+
+   /**
+    * What the ring showing the keyboard is drawn with, or unset for the plain
+    * one.
+    *
+    * The knob a theme reaches for -- and the reason Pen is an object with
+    * properties rather than only the struct the drawing model takes.  Unset is
+    * not "no ring": it means the default, a hairline of dots inside the border.
+    * A pen with no brush is how to ask for no ring at all.
+    */
+    @property Pen focusPen() const
+    {
+        auto value = getValue(focusPenProperty);
+        return value.empty ? null : value.get!Pen;
+    }
+
+    /// ditto
+    @property void focusPen(Pen value)
+    {
+        setValue(focusPenProperty, Value(value));
+    }
 
    /**
     * What fills the control behind its content, or null for nothing.
@@ -246,6 +291,15 @@ protected:
         if (bounds.empty)
             return;
 
+        // Last, over the fill and the border alike: it is a mark on top of the
+        // control rather than part of it, which is also why it is drawn from a
+        // scope(exit) -- every way out of the border code below is a return.
+        scope (exit)
+        {
+            if (isFocused)
+                renderFocusVisual(context);
+        }
+
         immutable radius = cornerRadius;
 
         if (auto fill = background)
@@ -302,6 +356,119 @@ protected:
             context.fillRectangle(Rect(bounds.width - border.right, border.top,
                                        border.right, middle), edge);
     }
+
+   /**
+    * Draws the ring that says the keyboard is here, inside the border.
+    *
+    * Its own method rather than part of onRender, because a control that draws
+    * something else entirely still wants this and should not have to reproduce
+    * it -- and because when templates arrive this is the piece that becomes an
+    * adorner rather than moving into one.
+    *
+    * Inside the border and inset by one, which is where every toolkit puts it:
+    * a ring on the border itself reads as part of the border, and a ring
+    * outside the control belongs to the layout of whatever is next to it.
+    */
+    void renderFocusVisual(DrawingContext context)
+    {
+        auto pen = focusPen;
+        if (pen is null)
+            pen = defaultFocusPen();
+
+        auto stroke = pen.stroke;
+        if (stroke.paint is null || !(stroke.thickness > 0))
+            return;
+
+        immutable border = borderThickness;
+        immutable half = stroke.thickness / 2;
+        immutable inset = 1 + half;
+
+        immutable ring = Rect(border.left + inset, border.top + inset,
+                              actualWidth - border.horizontal - inset * 2,
+                              actualHeight - border.vertical - inset * 2);
+        if (ring.empty)
+            return;
+
+        immutable radius = cornerRadius;
+
+        if (radius > 0)
+        {
+            immutable inner = atLeastZero(radius - border.left - inset);
+            context.drawRoundedRectangle(ring, inner, inner, stroke);
+        }
+        else
+        {
+            context.drawRectangle(ring, stroke);
+        }
+    }
+
+   /**
+    * A click puts the keyboard here.
+    *
+    * Not marked handled: taking the focus is not dealing with the press, and a
+    * control that also wants to act on it -- every button -- calls super first
+    * and then does so.  That ordering is why the hooks are documented as
+    * "override and call super first".
+    */
+    override void handleMouseDown(RoutedEventArgs args)
+    {
+        super.handleMouseDown(args);
+
+        auto mouse = cast(MouseEventArgs) args;
+        if (mouse is null || mouse.button != MouseButton.left)
+            return;
+
+        if (focusable && !isFocused)
+            focus();
+    }
+
+   /**
+    * The ring appears and disappears with the keyboard.
+    *
+    * Asked for by hand because IsFocused deliberately carries no affectsRender:
+    * most elements look identical focused and not, and a control that does
+    * change says so -- which is this saying so.
+    */
+    override void handleGotFocus(RoutedEventArgs args)
+    {
+        super.handleGotFocus(args);
+        invalidateVisual();
+    }
+
+    /// ditto
+    override void handleLostFocus(RoutedEventArgs args)
+    {
+        super.handleLostFocus(args);
+        invalidateVisual();
+    }
+
+private:
+   /*
+    * The ring nobody chose: a hairline of black dots.
+    *
+    * Made once per control and kept, for the reason every brush in the example
+    * is: a Pen is an object with properties, and one per frame would be one
+    * per frame.  It cannot be shared between controls through a static either
+    * -- a CherryObject binds to the dispatcher of the thread that built it.
+    *
+    * The square dash cap is load-bearing: a dot is a dash of zero length, so a
+    * dotted line with flat caps draws nothing at all.  See DashStyle.
+    */
+    Pen defaultFocusPen()
+    {
+        if (_defaultFocusPen is null)
+        {
+            _defaultFocusPen = new Pen(new SolidColorBrush(Color.black), 1);
+            _defaultFocusPen.dashStyle = DashStyle.dot;
+            _defaultFocusPen.dashCap = LineCap.square;
+        }
+
+        return _defaultFocusPen;
+    }
+
+    Pen _defaultFocusPen;
+
+protected:
 
 private:
     Brush brushOf(immutable(Property) property) const
@@ -477,4 +644,129 @@ unittest
     assertThrown(control.setValue(Control.cornerRadiusProperty, Value(float.infinity)));
     assertThrown(control.setValue(Control.cornerRadiusProperty, Value(float.nan)));
     assert(control.cornerRadius == 4);
+}
+
+unittest
+{
+    // A control takes the keyboard where a plain element does not.
+    auto control = new Control;
+    assert(control.focusable, "which is most of what being a control means");
+    assert(control.isTabStop);
+
+    auto plain = new Element;
+    assert(!plain.focusable, "and structure still does not");
+}
+
+unittest
+{
+    import cherry.platform.render : RecordingContext;
+    import cherry.ui.testing : makeWindow;
+
+    // The ring is drawn only while the keyboard is here, inside the border,
+    // and with the pen the control was given.
+    auto w = makeWindow();
+
+    auto control = new Control;
+    control.width = 100;
+    control.height = 40;
+    control.horizontalAlignment = HorizontalAlignment.left;
+    control.verticalAlignment = VerticalAlignment.top;
+    control.borderThickness = Thickness(2);
+    control.borderBrush = new SolidColorBrush(Color.black);
+
+    w.window.addChild(control);
+    w.window.updateLayout();
+
+    auto before = new RecordingContext;
+    control.renderSubtree(before);
+    immutable unfocused = before.entries.length;
+
+    control.focus();
+    assert(control.isFocused);
+
+    auto after = new RecordingContext;
+    control.renderSubtree(after);
+
+    assert(after.entries.length == unfocused + 1, "one more thing drawn, and only one");
+
+    auto ring = after.entries[$ - 1];
+    assert(ring.kind == RecordingContext.Kind.drawRectangle);
+    assert(ring.stroke.dashStyle == DashStyle.dot, "dotted, the way a focus ring is");
+    assert(ring.stroke.dashCap == LineCap.square,
+           "and with a cap, or a dot of zero length would draw nothing");
+
+    // Inside the 2-wide border, inset by one, and pulled in by half the stroke.
+    assert(ring.rect == Rect(3.5f, 3.5f, 93, 33));
+
+    control.unfocus();
+
+    auto gone = new RecordingContext;
+    control.renderSubtree(gone);
+    assert(gone.entries.length == unfocused, "and it goes when the keyboard does");
+}
+
+unittest
+{
+    import cherry.platform.render : RecordingContext;
+    import cherry.ui.testing : makeWindow;
+
+    // The pen is a property, so a theme can replace the ring -- and a pen with
+    // no brush is how to ask for no ring at all.
+    auto w = makeWindow();
+
+    auto control = new Control;
+    control.width = 100;
+    control.height = 40;
+    control.horizontalAlignment = HorizontalAlignment.left;
+    control.verticalAlignment = VerticalAlignment.top;
+    w.window.addChild(control);
+    w.window.updateLayout();
+    control.focus();
+
+    auto own = new Pen(new SolidColorBrush(Color.white), 3);
+    control.focusPen = own;
+
+    auto context = new RecordingContext;
+    control.renderSubtree(context);
+
+    assert(context.entries.length == 1);
+    assert(context.entries[0].stroke.thickness == 3);
+    assert(context.entries[0].stroke.dashStyle == DashStyle.solid, "this one is not dotted");
+
+    control.focusPen = new Pen;   // no brush: nothing to draw with
+
+    auto silent = new RecordingContext;
+    control.renderSubtree(silent);
+    assert(silent.entries.length == 0);
+}
+
+unittest
+{
+    import cherry.ui.input : onMouseDown;
+    import cherry.ui.testing : makeWindow;
+
+    // Clicking puts the keyboard on the control, and does not claim the press
+    // while doing it -- a control that also acts on the click still can.
+    auto w = makeWindow();
+
+    auto control = new Control;
+    control.width = 100;
+    control.height = 40;
+    control.horizontalAlignment = HorizontalAlignment.left;
+    control.verticalAlignment = VerticalAlignment.top;
+    w.window.addChild(control);
+    w.window.updateLayout();
+
+    int windowHeard;
+    w.window.onMouseDown ~= (Element sender, RoutedEventArgs args) { ++windowHeard; };
+
+    w.platform.host.onMouseDown(MouseButton.left, 50, 20);
+
+    assert(control.isFocused);
+    assert(windowHeard == 1, "taking the focus is not dealing with the press");
+
+    // The right button is not how anything is focused.
+    control.unfocus();
+    w.platform.host.onMouseDown(MouseButton.right, 50, 20);
+    assert(!control.isFocused);
 }
