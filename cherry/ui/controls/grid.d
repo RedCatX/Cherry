@@ -619,9 +619,11 @@ protected:
 
             immutable ci = trackIndex(getColumn(child), columns.count);
             immutable ri = trackIndex(getRow(child), rows.count);
+            immutable cs = trackSpan(getColumnSpan(child), ci, columns.count);
+            immutable rs = trackSpan(getRowSpan(child), ri, rows.count);
 
             child.arrange(Rect(columns.offsetOf(ci), rows.offsetOf(ri),
-                               columns.extentOf(ci), rows.extentOf(ri)));
+                               columns.extentOf(ci, cs), rows.extentOf(ri, rs)));
         }
 
         return finalSize;
@@ -689,6 +691,35 @@ private:
             return lengthAt(index).isStar && available < float.infinity;
         }
 
+       /*
+        * Whether a child covering these tracks can decide how big they are.
+        *
+        * Yes when at least one of them grows from its content and **none** of
+        * them takes a share of the remainder.  That second condition is the
+        * limit worth knowing: a child spanning an auto track and a star track
+        * grows neither of them.  Its size cannot say how the auto should grow,
+        * because the star beside it may be about to take the whole span --
+        * and the alternative, letting the content decide the auto first, makes
+        * a wide child push a column out to its full width and then leaves the
+        * star with nothing to do.  WPF resolves this with an extra pass over
+        * the children in exactly this position; here it is one rule instead.
+        */
+        bool spanGrowsFromContent(size_t index, size_t span, float available) const
+        {
+            bool anyContent = false;
+
+            foreach (i; index .. index + span)
+            {
+                if (sharesRemainder(i, available))
+                    return false;
+
+                if (growsFromContent(i, available))
+                    anyContent = true;
+            }
+
+            return anyContent;
+        }
+
         /// The whole length of the axis: every track laid end to end.
         @property float total() const pure nothrow @nogc
         {
@@ -709,10 +740,53 @@ private:
             return offset;
         }
 
-        /// How long a track is.
-        float extentOf(size_t index) const pure nothrow @nogc
+        /// How long a run of tracks is, laid end to end.
+        float extentOf(size_t index, size_t span) const pure nothrow @nogc
         {
-            return sizes[index];
+            float sum = 0;
+            foreach (i; index .. index + span)
+                sum += sizes[i];
+
+            return sum;
+        }
+
+       /*
+        * Gives a child's unmet size to the tracks under it that grow from
+        * their content, sharing it equally between them.
+        *
+        * Equally, and not in proportion to what they already are: there is no
+        * reason to think a track that happens to be wider deserves more of a
+        * child that spans both.  For a child in a single track this reduces to
+        * "the track is at least as big as the child", which is the whole of the
+        * unspanned case and is why there is only one rule here.
+        */
+        void giveToContent(size_t index, size_t span, float wanted, float available)
+        {
+            float have = 0;
+            size_t growing = 0;
+
+            foreach (i; index .. index + span)
+            {
+                have += sizes[i];
+
+                if (growsFromContent(i, available))
+                    ++growing;
+            }
+
+            if (growing == 0)
+                return;
+
+            immutable shortfall = wanted - have;
+            if (!(shortfall > 0))
+                return;
+
+            immutable share = shortfall / growing;
+
+            foreach (i; index .. index + span)
+            {
+                if (growsFromContent(i, available))
+                    sizes[i] = clampLength(sizes[i] + share, minAt(i), maxAt(i));
+            }
         }
     }
 
@@ -781,23 +855,31 @@ private:
 
             immutable ci = trackIndex(getColumn(child), columns.count);
             immutable ri = trackIndex(getRow(child), rows.count);
+            immutable cs = trackSpan(getColumnSpan(child), ci, columns.count);
+            immutable rs = trackSpan(getRowSpan(child), ri, rows.count);
 
-            immutable growsWide = columns.growsFromContent(ci, availableSize.width);
-            immutable growsTall = rows.growsFromContent(ri, availableSize.height);
+            immutable growsWide = columns.spanGrowsFromContent(ci, cs, availableSize.width);
+            immutable growsTall = rows.spanGrowsFromContent(ri, rs, availableSize.height);
 
             if (!growsWide && !growsTall)
                 continue;
 
-            child.measure(Size(columns.lengthAt(ci).isAbsolute ? columns.sizes[ci] : float.infinity,
-                               rows.lengthAt(ri).isAbsolute ? rows.sizes[ri] : float.infinity));
+            // Infinity on the axis the child gets to decide, and the tracks as
+            // they stand on the other -- which may be provisional, since a star
+            // beside it has not been divided yet.  What that costs is a child
+            // whose height depends on its width, wrapped text above all: it is
+            // measured here against a width it may not end up with.  The last
+            // pass measures it again against the real one.
+            child.measure(Size(growsWide ? float.infinity : columns.extentOf(ci, cs),
+                               growsTall ? float.infinity : rows.extentOf(ri, rs)));
 
             immutable wanted = child.desiredSize;
 
-            if (growsWide && wanted.width > columns.sizes[ci])
-                columns.sizes[ci] = clampLength(wanted.width, columns.minAt(ci), columns.maxAt(ci));
+            if (growsWide)
+                columns.giveToContent(ci, cs, wanted.width, availableSize.width);
 
-            if (growsTall && wanted.height > rows.sizes[ri])
-                rows.sizes[ri] = clampLength(wanted.height, rows.minAt(ri), rows.maxAt(ri));
+            if (growsTall)
+                rows.giveToContent(ri, rs, wanted.height, availableSize.height);
         }
     }
 
@@ -903,8 +985,10 @@ private:
 
             immutable ci = trackIndex(getColumn(child), columns.count);
             immutable ri = trackIndex(getRow(child), rows.count);
+            immutable cs = trackSpan(getColumnSpan(child), ci, columns.count);
+            immutable rs = trackSpan(getRowSpan(child), ri, rows.count);
 
-            child.measure(Size(columns.extentOf(ci), rows.extentOf(ri)));
+            child.measure(Size(columns.extentOf(ci, cs), rows.extentOf(ri, rs)));
         }
     }
 
@@ -936,6 +1020,23 @@ private:
             return 0;
 
         return cast(size_t) value >= count ? count - 1 : cast(size_t) value;
+    }
+
+   /*
+    * How many tracks a child really covers: what it asked for, cut down to what
+    * is left after the one it starts in.
+    *
+    * A span of zero or less is one track, which is the same pinning trackIndex
+    * does and for the same reason -- a span that covered nothing would be a
+    * child with nowhere to be.
+    */
+    static size_t trackSpan(int value, size_t index, size_t count) pure nothrow @nogc
+    {
+        if (value <= 1)
+            return 1;
+
+        immutable room = count - index;
+        return cast(size_t) value > room ? room : cast(size_t) value;
     }
 
     DefinitionBase[] _rows;
@@ -1463,4 +1564,125 @@ unittest
     assert(second.actualWidth == 300, "both floors hold, and the grid overflows");
     assert(grid.desiredSize.width == 400, "which the grid reports only as far as it was offered");
     assert(grid.unclippedDesiredSize.width == 600, "the truth is still on the record");
+}
+
+unittest
+{
+    // A child covering two columns is placed across both of them.
+    auto grid = new Grid;
+    grid.addColumn(GridLength(40));
+    grid.addColumn(GridLength(60));
+    grid.addColumn(GridLength(30));
+    grid.addRow(GridLength(20));
+
+    auto wide = cell(grid, new Filler, 0, 0);
+    Grid.setColumnSpan(wide, 2);
+
+    auto last = cell(grid, new Filler, 2, 0);
+
+    layOut(grid, Size(500, 400));
+
+    assert(wide.arrangedRect == Rect(0, 0, 100, 20), "both columns, end to end");
+    assert(last.arrangedRect == Rect(100, 0, 30, 20), "and the third is where it always was");
+}
+
+unittest
+{
+    // A span past the last track is cut down to what is there.
+    auto grid = new Grid;
+    grid.addColumn(GridLength(40));
+    grid.addColumn(GridLength(60));
+    grid.addRow(GridLength(20));
+
+    auto greedy = cell(grid, new Filler, 1, 0);
+    Grid.setColumnSpan(greedy, 9);
+
+    layOut(grid, Size(500, 400));
+
+    assert(greedy.arrangedRect == Rect(40, 0, 60, 20), "one column, because there is only one left");
+}
+
+unittest
+{
+    // A spanned child grows the auto columns under it, sharing what it needs
+    // equally between them.
+    auto grid = new Grid;
+    grid.addColumn(GridLength.autoSize);
+    grid.addColumn(GridLength.autoSize);
+    grid.addRow(GridLength.autoSize);
+
+    auto wide = cell(grid, new Box(100, 10), 0, 0);
+    Grid.setColumnSpan(wide, 2);
+
+    layOut(grid, Size(500, 400));
+
+    assert(grid.column(0).actualWidth == 50);
+    assert(grid.column(1).actualWidth == 50, "fifty each, because neither had a reason to be wider");
+    assert(grid.desiredSize.width == 100);
+}
+
+unittest
+{
+    // The shortfall is what is missing and not the whole child: a column that
+    // is already wide enough for its own content keeps that width, and only
+    // what is left over is shared.
+    auto grid = new Grid;
+    grid.addColumn(GridLength.autoSize);
+    grid.addColumn(GridLength.autoSize);
+    grid.addRow(GridLength.autoSize);
+    grid.addRow(GridLength.autoSize);
+
+    // A tall child of its own in the first column, on its own row.
+    cell(grid, new Box(80, 10), 0, 0);
+
+    auto wide = cell(grid, new Box(100, 10), 0, 1);
+    Grid.setColumnSpan(wide, 2);
+
+    layOut(grid, Size(500, 400));
+
+    assert(grid.column(0).actualWidth == 90, "eighty of its own, plus half of the twenty missing");
+    assert(grid.column(1).actualWidth == 10);
+    assert(grid.desiredSize.width == 100);
+}
+
+unittest
+{
+    // The recorded limit: a child spanning an auto track and a star track grows
+    // neither of them.
+    //
+    // Not an oversight.  Its width cannot say how wide the auto should be,
+    // because the star beside it is about to take whatever is left -- and
+    // letting the content decide first would push the auto column out to the
+    // child's full width and leave the star with nothing to do.  WPF spends an
+    // extra pass over exactly these children; this is one rule instead, and the
+    // case it costs is rare.
+    auto grid = new Grid;
+    grid.addColumn(GridLength.autoSize);
+    grid.addColumn(GridLength.star(1));
+    grid.addRow(GridLength(20));
+
+    auto spanning = cell(grid, new Box(300, 10), 0, 0);
+    Grid.setColumnSpan(spanning, 2);
+
+    layOut(grid, Size(400, 400));
+
+    assert(grid.column(0).actualWidth == 0, "nothing else asked for anything here");
+    assert(grid.column(1).actualWidth == 400, "and the star took the lot");
+    assert(spanning.arrangedRect.width == 300, "the child still gets the room it needs");
+}
+
+unittest
+{
+    // Spanning works down as well as across, and the two do not interfere.
+    auto grid = new Grid;
+    grid.addRow(GridLength(30));
+    grid.addRow(GridLength(50));
+    grid.addColumn(GridLength(40));
+
+    auto tall = cell(grid, new Filler, 0, 0);
+    Grid.setRowSpan(tall, 2);
+
+    layOut(grid, Size(400, 400));
+
+    assert(tall.arrangedRect == Rect(0, 0, 40, 80));
 }
