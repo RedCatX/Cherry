@@ -77,11 +77,75 @@ class Button : Control
         isPressedKey = Property.registerReadOnly("IsPressed",
             getRtti!bool(), getRtti!Button(), pressedMeta);
 
+        // Neither changes how the button looks or how big it is.  A theme that
+        // wants to mark the default one draws on IsDefault itself, the way it
+        // draws on IsPressed.
+        PropertyMetadata actionMeta;
+        actionMeta.defaultValue = Value(false);
+
+        isDefaultProperty = Property.register("IsDefault",
+            getRtti!bool(), getRtti!Button(), actionMeta);
+        isCancelProperty = Property.register("IsCancel",
+            getRtti!bool(), getRtti!Button(), actionMeta);
+
         clickEvent = RoutedEvent.register("Click", RoutingStrategy.bubble, getRtti!Button());
     }
 
     static immutable(Property) textProperty;
+    static immutable(Property) isDefaultProperty;
+    static immutable(Property) isCancelProperty;
     static immutable(RoutedEvent) clickEvent;
+
+   /**
+    * Whether Enter presses this button from anywhere in the window, and
+    * whether Escape does.
+    *
+    * "From anywhere" means from wherever the keyboard is, once whatever has it
+    * has declined the key -- a text field that wants Enter for itself keeps it,
+    * and this never hears about it.  A focused button is pressed by Enter
+    * whether or not it is the default one, so the default button of a window
+    * that has the keyboard on another button does not also fire.
+    *
+    * One of each per window: there are no focus scopes, so the first one the
+    * tree offers in document order is the one that answers.
+    */
+    @property bool isDefault() const
+    {
+        return getValue(isDefaultProperty).get!bool;
+    }
+
+    /// ditto
+    @property void isDefault(bool value)
+    {
+        setValue(isDefaultProperty, Value(value));
+    }
+
+    /// ditto
+    @property bool isCancel() const
+    {
+        return getValue(isCancelProperty).get!bool;
+    }
+
+    /// ditto
+    @property void isCancel(bool value)
+    {
+        setValue(isCancelProperty, Value(value));
+    }
+
+   /**
+    * How the window finds this button when nothing claimed an Enter or an
+    * Escape.  See Element for why it asks rather than being told.
+    */
+    override @property bool isDefaultAction() const
+    {
+        return isDefault;
+    }
+
+    /// ditto
+    override @property bool isCancelAction() const
+    {
+        return isCancel;
+    }
 
    /**
     * Whether the button is being held down.
@@ -233,7 +297,11 @@ protected:
         // Enter acts at once, and again on every repeat while it is held.  Both
         // a native button and WPF's do this, and it is what makes holding Enter
         // on a spin button work.
-        if (pressed.key == Key.enter)
+        //
+        // Escape only when this is the cancel button -- otherwise Escape on a
+        // focused button would press it, which is the one thing somebody
+        // pressing Escape certainly did not mean.
+        if (pressed.key == Key.enter || (pressed.key == Key.escape && isCancel))
         {
             args.handled = true;
             raiseEvent(new RoutedEventArgs(clickEvent));
@@ -666,4 +734,92 @@ unittest
 
     assert(b.button.isFocused);
     assert(b.button.isPressed, "and the press still happened");
+}
+
+unittest
+{
+    // Enter reaches the default button from wherever the keyboard is.
+    auto b = bench();
+    b.button.isDefault = true;
+
+    auto elsewhere = new Button;
+    b.window.window.addChild(elsewhere);
+    b.window.window.updateLayout();
+
+    int clicks;
+    b.button.onClick ~= (Element sender, RoutedEventArgs args) { ++clicks; };
+
+    int otherClicks;
+    elsewhere.onClick ~= (Element sender, RoutedEventArgs args) { ++otherClicks; };
+
+    // Nothing focused at all: the key starts at the window and is passed on.
+    assert(b.window.platform.host.onKeyDown(Key.enter, ModifierKeys.none, false));
+    assert(clicks == 1);
+
+    // The keyboard on another button: that one takes Enter for itself, and the
+    // default button does not also fire.
+    elsewhere.focus();
+    b.window.platform.host.onKeyDown(Key.enter, ModifierKeys.none, false);
+
+    assert(otherClicks == 1);
+    assert(clicks == 1, "a focused button is pressed by Enter, default or not");
+}
+
+unittest
+{
+    // Escape reaches the cancel button, and only the cancel button.
+    auto b = bench();
+
+    auto cancel = new Button;
+    cancel.isCancel = true;
+    b.window.window.addChild(cancel);
+    b.window.window.updateLayout();
+
+    int cancelled;
+    cancel.onClick ~= (Element sender, RoutedEventArgs args) { ++cancelled; };
+
+    int pressed;
+    b.button.onClick ~= (Element sender, RoutedEventArgs args) { ++pressed; };
+
+    // Even with the keyboard on an ordinary button, which does not treat
+    // Escape as a press of itself.
+    b.button.focus();
+    assert(b.window.platform.host.onKeyDown(Key.escape, ModifierKeys.none, false));
+
+    assert(cancelled == 1);
+    assert(pressed == 0, "Escape on a button is not a press of it");
+}
+
+unittest
+{
+    // Something that answers yes and then does nothing with the key must not
+    // send it round again.
+    static class Deaf : Button
+    {
+        override @property bool isDefaultAction() const { return true; }
+
+        protected override void handleKeyDown(RoutedEventArgs args)
+        {
+            // Deliberately not calling super: it claims nothing and leaves the
+            // event to carry on bubbling, which is the loop worth proving does
+            // not happen.
+        }
+    }
+
+    auto w = makeWindow();
+    auto deaf = new Deaf;
+    w.window.addChild(deaf);
+    w.window.updateLayout();
+
+    assert(!w.platform.host.onKeyDown(Key.enter, ModifierKeys.none, false),
+           "nobody handled it, and the window did not try forever");
+}
+
+unittest
+{
+    // With no default button, Enter is left for the platform.
+    auto b = bench();
+
+    assert(!b.window.platform.host.onKeyDown(Key.enter, ModifierKeys.none, false));
+    assert(!b.window.platform.host.onKeyDown(Key.escape, ModifierKeys.none, false));
 }

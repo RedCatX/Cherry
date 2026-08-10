@@ -537,11 +537,24 @@ protected:
         super.handleKeyDown(args);
 
         auto pressed = cast(KeyEventArgs) args;
-        if (pressed is null || pressed.key != Key.tab)
+        if (pressed is null)
             return;
 
-        if (moveFocus((pressed.modifiers & ModifierKeys.shift) != 0))
-            args.handled = true;
+        if (pressed.key == Key.tab)
+        {
+            if (moveFocus((pressed.modifiers & ModifierKeys.shift) != 0))
+                args.handled = true;
+
+            return;
+        }
+
+        // An Enter or an Escape that reached the window is one nothing wanted,
+        // which is exactly when the default and cancel buttons get their turn.
+        if (pressed.key == Key.enter || pressed.key == Key.escape)
+        {
+            if (dispatchToAction(pressed))
+                args.handled = true;
+        }
     }
 
 private:
@@ -587,6 +600,70 @@ private:
             next = (index + (backwards ? -1 : 1) + count) % count;
 
         return stops[next].focus();
+    }
+
+   /*
+    * Hands an unclaimed Enter or Escape to the button that was waiting for it.
+    *
+    * The key is raised again, on the element that answered yes -- which is how
+    * WPF's AccessKeyManager does the same job, and it means no new vocabulary:
+    * the button already knows what Enter means and needs telling nothing else.
+    *
+    * The flag is not optional.  The second event bubbles up to this window like
+    * any other, and an element that answered yes but then did nothing with the
+    * key would send it round again for as long as the stack held out.
+    */
+    bool dispatchToAction(KeyEventArgs pressed)
+    {
+        if (_dispatchingAction)
+            return false;
+
+        immutable wantsDefault = pressed.key == Key.enter;
+
+        auto target = findAction(this, wantsDefault);
+
+        // Nothing to send it to, or it is the element that just declined it --
+        // asking twice would get the same answer.
+        if (target is null || target is keyTarget)
+            return false;
+
+        _dispatchingAction = true;
+        scope (exit) _dispatchingAction = false;
+
+        auto again = new KeyEventArgs(keyDownEvent, pressed.key,
+                                      pressed.modifiers, pressed.isRepeat);
+        target.raiseEvent(again);
+
+        return again.handled;
+    }
+
+   /*
+    * The first element of the tree that wants the key, in document order.
+    *
+    * One per window: there are no focus scopes, so a dialog with two panels
+    * each holding their own default button is not something this can express.
+    * The walk prunes the same way the tab walk does -- a layer that is not
+    * there for input does not have a default button in it.
+    */
+    static Element findAction(Element parent, bool wantsDefault)
+    {
+        auto view = parent.children;
+
+        foreach (i; 0 .. view.length)
+        {
+            auto child = view[i];
+
+            if (!child.isHitTestVisible)
+                continue;
+
+            if (wantsDefault ? child.isDefaultAction : child.isCancelAction)
+                return child;
+
+            if (auto found = findAction(child, wantsDefault))
+                return found;
+        }
+
+        return null;
     }
 
    /*
@@ -948,6 +1025,10 @@ private:
     // Where the keyboard was when the window lost it, so that coming back from
     // another application lands where the user left off.
     Element        _focusOnReturn;
+    // Whether an Enter or an Escape is already being handed to the button that
+    // wanted it, so that a button which does nothing with it cannot start the
+    // journey over.
+    bool           _dispatchingAction;
     Multicast!(void delegate(Window)) _onClosed;
     Multicast!WindowClosingHandler _onClosing;
     bool _syncingFromPlatform;

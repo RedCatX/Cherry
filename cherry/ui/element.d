@@ -1168,6 +1168,31 @@ class Element : Visual
     }
 
    /**
+    * Whether an Enter that nothing else claimed should be sent here, and the
+    * same for an Escape.
+    *
+    * A question the surface asks of the tree rather than a registration the
+    * element makes, and the difference matters.  An element that registered
+    * would have to do it again every time it or any ancestor above it joined a
+    * tree -- attaching a panel does not attach its children twice -- and would
+    * leave a reference behind in a window it had left.  Asking instead costs
+    * one walk of the tree, on a keystroke nobody else wanted, which is nothing.
+    *
+    * Element answers no to both.  Button answers with IsDefault and IsCancel;
+    * anything else with an opinion overrides them.
+    */
+    @property bool isDefaultAction() const
+    {
+        return false;
+    }
+
+    /// ditto
+    @property bool isCancelAction() const
+    {
+        return false;
+    }
+
+   /**
     * Gives the keyboard to an element below, or takes it back.
     *
     * The default refuses, which is the right answer for a tree with no surface
