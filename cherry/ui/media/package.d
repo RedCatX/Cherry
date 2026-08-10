@@ -16,3 +16,4 @@ module cherry.ui.media;
  */
 
 public import cherry.ui.media.brush;
+public import cherry.ui.media.pen;
