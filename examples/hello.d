@@ -6,7 +6,19 @@ import cherry.core;
 import cherry.ui;
 import cherry.platform;
 
-class HelloWindow : Window
+/**
+ * The cherries, drawn to fit whatever room they are given.
+ *
+ * **An element rather than something the window paints on itself**, and that is
+ * the difference worth seeing: a drawing at fixed coordinates on the window
+ * stays exactly where it is however the window is resized, because nothing about
+ * it is a layout.  This one is in a cell, so the cell decides.
+ *
+ * The artwork keeps the coordinates it was drawn in, and a transform puts it
+ * where it belongs -- which is what the transform stack is for.  Nothing here
+ * recalculates a single ellipse; the whole picture is placed with one matrix.
+ */
+class Cherries : Element
 {
    /**
     * The brushes are built once and kept.  A brush is an object with
@@ -23,8 +35,37 @@ class HelloWindow : Window
         _shine = new SolidColorBrush(Color.rgb(1.0, 0.55, 0.60));
     }
 
-    protected override void onRender(DrawingContext context)
+protected:
+   /**
+    * How big the picture would like to be, which is how big it was drawn.
+    *
+    * It gets a star cell here so nobody asks, but an auto cell would -- and
+    * then the column would be as wide as the cherries, which is the answer an
+    * auto column is for.
+    */
+    override Size measureOverride(Size availableSize)
     {
+        return Size(artWidth, artHeight);
+    }
+
+    override void onRender(DrawingContext context)
+    {
+        // As large as it can be without distorting, centred in what is left.
+        immutable byWidth = actualWidth / artWidth;
+        immutable byHeight = actualHeight / artHeight;
+        immutable scale = byWidth < byHeight ? byWidth : byHeight;
+
+        if (!(scale > 0))
+            return;
+
+        // Read left to right: take the artwork to the origin, size it, put it
+        // in the middle.  A * B means "A and then B" -- see Matrix.
+        context.pushTransform(Matrix.translation(-artX, -artY)
+                            * Matrix.scaling(scale, scale)
+                            * Matrix.translation((actualWidth - artWidth * scale) / 2,
+                                                 (actualHeight - artHeight * scale) / 2));
+        scope (exit) context.popTransform();
+
         // Stems.
         context.drawLine(Point(400, 120), Point(330, 270), Stroke(_stem, 6));
         context.drawLine(Point(400, 120), Point(470, 260), Stroke(_stem, 6));
@@ -42,6 +83,12 @@ class HelloWindow : Window
     }
 
 private:
+    // The box the drawing above occupies, in its own coordinates.
+    enum artX = 265.0f;
+    enum artY = 96.0f;
+    enum artWidth = 280.0f;
+    enum artHeight = 300.0f;
+
     SolidColorBrush _stem, _leaf, _dark, _bright, _shine;
 }
 
@@ -165,8 +212,8 @@ void main()
 {
     auto dispatcher = new Dispatcher(createPlatformEventLoop());
 
-    auto window = new HelloWindow;
-    window.setValue(Window.titleProperty, Value("Hello from Cherry!"));
+    auto window = new Window;
+    window.title = "Hello from Cherry!";
 
     // The window is one cell, so anything with more than one thing in it needs
     // something that divides.  Two columns and two rows: the stripes take the
@@ -256,6 +303,14 @@ void main()
     Grid.setColumn(stripes, 0);
     Grid.setRow(stripes, 0);
     layout.addChild(stripes);
+
+    // And the picture in the column that takes everything left over, which is
+    // the whole point of the grid: drag the window wider and the cherries grow
+    // while the stripes stay exactly as wide as they need to be.
+    auto cherries = new Cherries;
+    Grid.setColumn(cherries, 1);
+    Grid.setRow(cherries, 0);
+    layout.addChild(cherries);
 
     // Along the bottom and across both columns, in the row that is as tall as
     // the text in it -- so the line sits where it sits because of what it is,
