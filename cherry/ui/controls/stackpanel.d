@@ -172,12 +172,22 @@ protected:
         float along = 0;
         float across = 0;
 
+        // Counted rather than taken from view.length, because the gaps below
+        // are between the children that are *in* the line.  A collapsed child
+        // measures to nothing, so it adds nothing to either total on its own --
+        // but a gap is not the child's size, and one left where it used to be
+        // would be a hole with nothing in it.
+        size_t inLine = 0;
+
         auto view = children;
 
         foreach (i; 0 .. view.length)
         {
             auto child = view[i];
             child.measure(offer);
+
+            if (child.visible)
+                ++inLine;
 
             immutable size = child.desiredSize;
 
@@ -195,11 +205,11 @@ protected:
             }
         }
 
-        // n children, n - 1 gaps.  Spelled with the guard rather than as
-        // (length - 1), because length is a size_t and one child would
+        // n children in the line, n - 1 gaps.  Spelled with the guard rather
+        // than as (inLine - 1), because inLine is a size_t and one child would
         // otherwise buy four billion gaps.
-        if (view.length > 1)
-            along += spacing * (view.length - 1);
+        if (inLine > 1)
+            along += spacing * (inLine - 1);
 
         // A spacing negative enough to out-pull the children is a direction
         // rather than a length, and a size is not negative.  Only the answer
@@ -245,17 +255,27 @@ protected:
 
         float cursor = 0;
 
+        // Whether anything is behind the cursor yet, which is what decides
+        // whether the next child has something to be spaced away from.  Not the
+        // index: a collapsed child is not in the line, so it neither takes a gap
+        // before itself nor leaves one behind, and the first child that is
+        // really placed starts at nothing however many came before it.
+        bool placed = false;
+
         auto view = children;
 
         foreach (i; 0 .. view.length)
         {
-            // Before every child but the first, which is the whole of what
-            // "between" means.  Not floored: a negative gap walking the cursor
-            // backwards is the overlap that was asked for.
-            if (i)
+            auto child = view[i];
+
+            // Before every child in the line but the first, which is the whole
+            // of what "between" means.  Not floored: a negative gap walking the
+            // cursor backwards is the overlap that was asked for.
+            if (placed && child.visible)
                 cursor += gap;
 
-            auto child = view[i];
+            placed = placed || child.visible;
+
             immutable size = child.desiredSize;
 
             if (isVertical)
@@ -702,4 +722,36 @@ unittest
     panel.spacing = 12;
     assert(!panel.isMeasureValid);
     assert(!parent.isMeasureValid, "and so does the room between the children");
+}
+
+unittest
+{
+    // A collapsed child is not in the line at all: it costs no length, it is
+    // given no gap of its own, and the children after it close up over it.
+    auto panel = new StackPanel;
+    panel.spacing = 10;
+    auto first  = new Rung(30);
+    auto hidden = new Rung(50);
+    auto last   = new Rung(20);
+    panel.addChild(first);
+    panel.addChild(hidden);
+    panel.addChild(last);
+
+    layOut(panel, Size(200, 400));
+
+    assert(panel.desiredSize.height == 30 + 10 + 50 + 10 + 20, "all three, to begin with");
+    assert(last.arrangedRect.y == 100);
+
+    hidden.visible = false;
+    layOut(panel, Size(200, 400));
+
+    // Two children left, so one gap: the collapsed one takes its own gap with
+    // it rather than leaving a hole where it was.
+    assert(panel.desiredSize.height == 30 + 10 + 20);
+    assert(last.arrangedRect.y == 40, "closed up over it");
+    assert(hidden.arrangedRect.empty);
+
+    hidden.visible = true;
+    layOut(panel, Size(200, 400));
+    assert(last.arrangedRect.y == 100, "and back again");
 }
