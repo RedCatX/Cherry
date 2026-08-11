@@ -10,10 +10,9 @@ module cherry.ui.visual;
  * imported layout.d as well, the cycle would close through it and element.d
  * and this module would be in the same one.  It would build today, because
  * there is no constructor here.  It would stop building on the day Visual
- * registers its first property -- Opacity, IsVisible, Clip, ZIndex are all
- * coming -- and it would stop by aborting every binary built against the
- * framework before main(), with a cyclic-dependency error naming neither the
- * import nor the property.
+ * registers its first property, and it would stop by aborting every binary
+ * built against the framework before main(), with a cyclic-dependency error
+ * naming neither the import nor the property.
  *
  * So the one thing Visual wanted from layout.d, somewhere to put a repaint
  * request, goes behind the enqueueRepaint hook below instead.  Element
@@ -21,9 +20,9 @@ module cherry.ui.visual;
  * this imports nothing of cherry.ui but styledelement.d -- and a module
  * constructor here becomes a perfectly ordinary thing to add.
  *
- * Which it now is: IsHitTestVisible below is registered from one.  It is worth
- * noticing that this is exactly the day the paragraph above was written for,
- * and that nothing had to be rearranged to reach it.
+ * Which it now is: the five properties below are registered from one.  It is
+ * worth noticing that this is exactly the day the paragraph above was written
+ * for, and that nothing had to be rearranged to reach it.
  */
 
 import cherry.core.property;
@@ -48,10 +47,16 @@ import cherry.ui.styledelement;
  * element tree are the same tree.  They part company when control templates
  * arrive; the storage moves here then, and no caller changes.
  *
- * Still to come on this layer: Opacity, IsVisible, Clip and ZIndex as
- * properties, and hit-testing -- which is the next thing that will be built,
- * and which belongs here rather than on Element because what the mouse hits is
- * what is drawn.
+ * **What this layer decides is what reaches the screen and in what order.**
+ * visible says whether there is anything here at all, opacity how much of it
+ * comes through, clipToBounds what is cut away at the edges, zIndex which
+ * sibling is in front, and isHitTestVisible whether the mouse may find it.
+ * Hit-testing lives here rather than on Element for the same reason all five
+ * do: what the mouse hits is what is drawn, and drawing is what this layer is.
+ *
+ * Still to come: an arbitrary clip rather than the bounds, RenderTransform, and
+ * caching a subtree as a bitmap.  All three want a geometry or a surface of
+ * their own, which is why none of them is here yet.
  */
 class Visual : StyledElement
 {
@@ -335,9 +340,9 @@ class Visual : StyledElement
    /**
     * The region this visual draws into, in its own coordinate space.
     *
-    * The default is its own bounds.  Nothing clips, so that default is a claim
-    * rather than a fact: a visual drawing a shadow, a focus ring or an
-    * overshooting glyph draws outside it and must widen this to say so.
+    * The default is its own bounds, and unless something clips it that default
+    * is a claim rather than a fact: a visual drawing a shadow, a focus ring or
+    * an overshooting glyph draws outside it and must widen this to say so.
     *
     * What the framework promises is that every pixel inside the region a
     * visual declares here, or names through invalidateVisual(Rect), is
@@ -346,8 +351,13 @@ class Visual : StyledElement
     *
     * What it does not promise is that nothing else is repainted; the region is
     * a lower bound.  Nor does it promise anything at all about drawing outside
-    * the region declared here.  That is the price of having no clipping, and it
-    * is paid by the visual that understated its reach.
+    * the region declared here: a visual that understated its reach pays for it
+    * in pixels that stay on the screen after they should have gone.
+    *
+    * A clipping ancestor is the one thing that narrows the promise from the
+    * other side, and narrowing it there is free: clippedToRootSpace cuts the
+    * region down before it is asked for, because pixels that were never drawn
+    * do not have to be drawn again.
     *
     * Only this visual's own drawing is meant, not its children's.  A repaint
     * redraws the whole tree and uses the region to decide which pixels reach
@@ -380,10 +390,18 @@ class Visual : StyledElement
     * it pushes is a translation by nothing -- which is why a window needs no
     * exception rather than being one.
     *
-    * Nothing is clipped.  A visual drawing outside its own bounds is seen doing
-    * it, on purpose: overflow that shows is overflow that gets fixed.
+    * Nothing is clipped unless a visual asked to be: a visual drawing outside
+    * its own bounds is seen doing it, on purpose, because overflow that shows
+    * is overflow that gets fixed.  clipToBounds is how a container that means
+    * to hold its content in says so.
     *
-    * The push is undone on the way out whether onRender returns or throws, so
+    * Four properties are read on the way through, and each of them can end the
+    * walk or wrap it: visible skips the subtree, a zero opacity skips it,
+    * clipToBounds narrows it, a lower opacity puts it in a layer.  They are
+    * applied in that order, so nothing is ever set up for a subtree that turns
+    * out not to be drawn.
+    *
+    * Every push is undone on the way out whether onRender returns or throws, so
     * an exception leaving a visual finds the context as balanced as it left it.
     */
     final void renderSubtree(DrawingContext context)
