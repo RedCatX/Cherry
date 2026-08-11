@@ -899,8 +899,11 @@ class Element : Visual
         Size arrangeSize = client;
 
         // A slot too small is not made to fit by squeezing.  The element takes
-        // the room it said it needed and overflows, which is visible and can be
-        // clipped later; a squeezed element is wrong and says nothing about it.
+        // the room it said it needed and overflows; a squeezed element is wrong
+        // and says nothing about it.  What is *seen* of the overflow is settled
+        // below by the layout clip -- the element keeps its size and shows only
+        // where there was room, which is how the two halves of this rule fit
+        // together.
         arrangeSize.width  = atLeast(arrangeSize.width,  _unclippedDesiredSize.width);
         arrangeSize.height = atLeast(arrangeSize.height, _unclippedDesiredSize.height);
 
@@ -944,6 +947,29 @@ class Element : Visual
                    arranged.width,
                    arranged.height)
             : Rect(finalRect.x, finalRect.y, 0, 0);
+
+        // The layout clip: the room the parent actually granted, in this
+        // element's own space, kept only when the element outgrew it.
+        //
+        // **This is the other half of "a slot too small is not made to fit by
+        // squeezing".** Refusing to squeeze is what puts an element outside the
+        // room it was given; without this it would then be drawn there, across
+        // whatever the parent has beside it -- a button's caption written over
+        // the panel next door.  The element keeps the size it said it needed,
+        // and what is seen of it is what fits.  WPF calls this the layout clip
+        // and arrives at it the same way.
+        //
+        // Only what the parent granted is cut by.  A visual drawing outside its
+        // own bounds on purpose -- a shadow, a focus ring -- is still drawn, as
+        // long as its element fitted; clipToBounds is the separate question of
+        // whether a visual holds its own drawing in.
+        _layoutClipped = visible
+                      && (arranged.width > client.width || arranged.height > client.height);
+
+        if (_layoutClipped)
+            _layoutClip = Rect(finalRect.x + m.left - _arrangedRect.x,
+                               finalRect.y + m.top  - _arrangedRect.y,
+                               client.width, client.height);
 
         setValue(actualWidthKey,  Value(arranged.width));
         setValue(actualHeightKey, Value(arranged.height));
@@ -1124,6 +1150,20 @@ class Element : Visual
     override Visual visualChild(size_t index)
     {
         return _children[index];
+    }
+
+   /**
+    * The room the last arrange granted this element, when it did not fit in it.
+    *
+    * Written by arrange, which is the only thing that knows both the slot and
+    * what the element made of it.  See the comment there for why an element
+    * that does not fit is placed outside its room rather than squeezed into it,
+    * and therefore why there is something to hold it to.
+    */
+    override bool layoutClip(out Rect region)
+    {
+        region = _layoutClip;
+        return _layoutClipped;
     }
 
    /**
@@ -1491,6 +1531,17 @@ protected:
     * every child the whole of the available space and asks for the largest
     * answer back -- a single-cell container, which is what an element with no
     * layout of its own amounts to.  Panels override this.
+    *
+    * **What is summed is _desiredSize, and it is capped at what was offered.**
+    * So a container whose own room is short reports the short number and is
+    * granted it, while a child that wanted more grows back to its unclipped
+    * size in arrange and hangs outside its parent.  That is deliberate here:
+    * this override is reached with a constraint that already has Width and
+    * MinWidth/MaxWidth folded into it, so it cannot tell "the offer was small"
+    * from "I was told to be this size" -- and answering above the constraint
+    * makes an element wider than its own Width, because _unclippedDesiredSize
+    * is never capped from above.  A container that must not be squeezed says so
+    * itself; Control does.
     */
     Size measureOverride(Size availableSize)
     {
@@ -1750,6 +1801,12 @@ private:
     // going back to the placement instead would let a right-aligned element
     // walk across its slot, one pass at a time.
     Rect                 _arrangeSlot;
+    // The room the parent granted, in this element's own space, and whether the
+    // element outgrew it.  Two fields rather than an empty rectangle standing
+    // for "none", because a parent that granted nothing at all is a real answer
+    // and Rect.init is how it arrives.
+    Rect                 _layoutClip;
+    bool                 _layoutClipped;
     bool                 _measureDirty = true;
     bool                 _arrangeDirty = true;
     bool                 _mouseCaptured;
@@ -2470,6 +2527,67 @@ unittest
 
     child.visible = false;
     assert(!parent.isMeasureValid, "the walk up from the child reaches it");
+}
+
+unittest
+{
+    // An element that did not fit is drawn only where there was room for it.
+    //
+    // Its size is untouched -- arrange never squeezes -- so this clip is the
+    // whole of what keeps an element that outgrew its slot off whatever the
+    // parent has beside it.
+    auto parent = new Element;
+    auto child = new Element;
+    parent.addChild(child);
+
+    child.width = 200;
+    child.height = 50;
+    child.horizontalAlignment = HorizontalAlignment.left;
+    child.verticalAlignment = VerticalAlignment.top;
+
+    parent.measure(Size(500, 500));
+    parent.arrange(Rect(0, 0, 500, 500));
+
+    Rect granted;
+    assert(!child.layoutClip(granted), "room to spare, so nothing holds it anywhere");
+
+    auto context = new RecordingContext;
+    parent.renderSubtree(context);
+    assert(context.clips.length == 0, "and the ordinary case pays nothing");
+
+    // Now less than half the width it needs.
+    parent.invalidateMeasure();
+    parent.measure(Size(80, 500));
+    parent.arrange(Rect(0, 0, 80, 500));
+
+    assert(child.arrangedRect == Rect(0, 0, 200, 50), "the size it asked for, as always");
+    assert(child.layoutClip(granted));
+    assert(granted == Rect(0, 0, 80, 500), "the room the parent really granted");
+
+    context = new RecordingContext;
+    parent.renderSubtree(context);
+    assert(context.clips == [Rect(0, 0, 80, 500)]);
+    assert(context.clipDepth == 0, "and it came off again");
+}
+
+unittest
+{
+    // What the layout cut away is not there to be clicked either.
+    auto parent = new Element;
+    auto child = new Element;
+    parent.addChild(child);
+
+    child.width = 200;
+    child.height = 50;
+    child.horizontalAlignment = HorizontalAlignment.left;
+    child.verticalAlignment = VerticalAlignment.top;
+
+    parent.measure(Size(80, 500));
+    parent.arrange(Rect(0, 0, 80, 500));
+
+    assert(parent.hitTest(Point(40, 20)) is child, "where it shows");
+    assert(parent.hitTest(Point(120, 20)) is null,
+           "and where it was cut there is nothing, not even the part that draws there");
 }
 
 unittest

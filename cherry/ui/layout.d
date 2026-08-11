@@ -885,6 +885,53 @@ unittest
 {
     // A clipping ancestor cuts the region down, because what it clipped away
     // was never going to be drawn and does not have to be drawn again.
+    //
+    // The child fits inside its frame here, so nothing the layout did is in the
+    // way and the only clip is the one somebody asked for.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto frame = new Element;
+        auto child = new Element;
+        surface.addChild(frame);
+        frame.addChild(child);
+
+        frame.width = 100;
+        frame.height = 100;
+        frame.horizontalAlignment = HorizontalAlignment.left;
+        frame.verticalAlignment = VerticalAlignment.top;
+
+        child.width = 60;
+        child.height = 60;
+        child.horizontalAlignment = HorizontalAlignment.left;
+        child.verticalAlignment = VerticalAlignment.top;
+
+        settle(surface);
+        surface.repaints = null;
+
+        child.invalidateVisual();
+        surface.updateLayout();
+
+        assert(surface.repaints[0] == Rect(0, 0, 60, 60), "nothing clips, so all of it");
+
+        // Half of it, by asking the frame to hold what is in it.
+        frame.width = 30;
+        frame.height = 30;
+        frame.clipToBounds = true;
+        settle(surface);
+        surface.repaints = null;
+
+        child.invalidateVisual();
+        surface.updateLayout();
+
+        assert(surface.repaints[0] == Rect(0, 0, 30, 30), "cut to the frame");
+    });
+}
+
+unittest
+{
+    // And the layout's own clip narrows it with nobody asking: a child too big
+    // for the room it was granted is drawn only where it was granted, so that
+    // is all there is to repaint.
     withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
         auto surface = new Surface;
         auto frame = new Element;
@@ -905,19 +952,13 @@ unittest
         settle(surface);
         surface.repaints = null;
 
-        child.invalidateVisual();
-        surface.updateLayout();
-
-        assert(surface.repaints[0] == Rect(0, 0, 400, 400), "nothing clips, so all of it");
-
-        frame.clipToBounds = true;
-        settle(surface);
-        surface.repaints = null;
+        assert(!frame.clipToBounds, "nobody asked for anything");
 
         child.invalidateVisual();
         surface.updateLayout();
 
-        assert(surface.repaints[0] == Rect(0, 0, 100, 100), "cut to the frame");
+        assert(surface.repaints[0] == Rect(0, 0, 100, 100),
+               "the child kept its size and shows only where there was room");
     });
 }
 

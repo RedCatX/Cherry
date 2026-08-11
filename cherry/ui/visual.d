@@ -390,16 +390,22 @@ class Visual : StyledElement
     * it pushes is a translation by nothing -- which is why a window needs no
     * exception rather than being one.
     *
-    * Nothing is clipped unless a visual asked to be: a visual drawing outside
-    * its own bounds is seen doing it, on purpose, because overflow that shows
-    * is overflow that gets fixed.  clipToBounds is how a container that means
-    * to hold its content in says so.
+    * **Two different things clip, and only one of them was asked for.**
+    * clipToBounds is a visual saying it holds its own drawing in; the layout
+    * clip is the room a parent granted an element that did not fit, and it
+    * applies whether anybody asked or not -- see Element.arrange, which creates
+    * the overflow on purpose by refusing to squeeze.  Where both are in force
+    * what may be drawn is what both allow.
     *
-    * Four properties are read on the way through, and each of them can end the
-    * walk or wrap it: visible skips the subtree, a zero opacity skips it,
-    * clipToBounds narrows it, a lower opacity puts it in a layer.  They are
-    * applied in that order, so nothing is ever set up for a subtree that turns
-    * out not to be drawn.
+    * Ink outside the bounds is otherwise still drawn, on purpose: a shadow or a
+    * focus ring reaches past its element, and overflow that shows is overflow
+    * that gets fixed.
+    *
+    * Five things are read on the way through, and each can end the walk or wrap
+    * it: visible skips the subtree, a zero opacity skips it, the two clips
+    * narrow it, a lower opacity puts it in a layer.  They are applied in that
+    * order, so nothing is ever set up for a subtree that turns out not to be
+    * drawn.
     *
     * Every push is undone on the way out whether onRender returns or throws, so
     * an exception leaving a visual finds the context as balanced as it left it.
@@ -429,12 +435,26 @@ class Visual : StyledElement
 
         // Read once and kept, so that the pop matches the push whatever a
         // handler somewhere below does to the property in between.  The clip
-        // goes on after the transform, because the rectangle is this visual's
-        // own bounds and those are named in its own space.
-        immutable clips = clipToBounds;
+        // goes on after the transform, because both rectangles are named in
+        // this visual's own space.
+        //
+        // Two clips that are one push: the bounds this visual asked to be held
+        // in, and the room the layout granted it.  Where both apply what is
+        // drawable is what both allow, which is their intersection.
+        Rect region;
+        immutable held = layoutClip(region);
+        immutable bounds = clipToBounds;
+
+        if (bounds)
+        {
+            immutable own = Rect(0, 0, _arrangedRect.width, _arrangedRect.height);
+            region = held ? region.intersect(own) : own;
+        }
+
+        immutable clips = bounds || held;
 
         if (clips)
-            context.pushClip(Rect(0, 0, _arrangedRect.width, _arrangedRect.height));
+            context.pushClip(region);
 
         // Registered after the transform's, so it runs before it: the clip
         // comes off first, in the reverse of the order they went on.
@@ -568,6 +588,13 @@ class Visual : StyledElement
             && !Rect(0, 0, _arrangedRect.width, _arrangedRect.height).contains(local))
             return null;
 
+        // And the part the layout cut away is not there to be hit either --
+        // the same rule from the other direction, and the reason a caption
+        // hanging out of its button cannot be clicked where it does not show.
+        Rect granted;
+        if (layoutClip(granted) && !granted.contains(local))
+            return null;
+
         auto order = drawOrder();
 
         foreach_reverse (i; 0 .. visualChildCount)
@@ -636,6 +663,10 @@ class Visual : StyledElement
             if (v.clipToBounds)
                 region = region.intersect(
                     Rect(0, 0, v._arrangedRect.width, v._arrangedRect.height));
+
+            Rect granted;
+            if (v.layoutClip(granted))
+                region = region.intersect(granted);
 
             if (region.empty)
                 return Rect.init;
@@ -707,6 +738,25 @@ protected:
     bool containsPoint(Point point)
     {
         return Rect(0, 0, _arrangedRect.width, _arrangedRect.height).contains(point);
+    }
+
+   /**
+    * The room the layout granted this visual, in its own space, and whether the
+    * layout is holding it to that room at all.
+    *
+    * False from a plain Visual, and that is the honest answer rather than a
+    * stub: a visual has a placement and nothing that granted it, so there is
+    * nothing for it to be held inside of.  Element overrides this -- it is the
+    * one that hands out slots and the one that refuses to squeeze anything into
+    * a slot too small, which is what creates something to hold in the first
+    * place.
+    *
+    * Read on every render and every hit test, so it answers rather than
+    * allocates.
+    */
+    bool layoutClip(out Rect region)
+    {
+        return false;
     }
 
    /**
