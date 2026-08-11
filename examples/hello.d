@@ -93,6 +93,49 @@ private:
 }
 
 /**
+ * A window onto something that may be bigger than the room available: it takes
+ * the room it is given, hands all of it to its child, and cuts off whatever the
+ * child makes of that which does not fit.
+ *
+ * **It asks for nothing of its own**, and that is the whole trick.  A parent
+ * never squeezes a child: Element.arrange grows a slot that is too small until
+ * the child fits, on the grounds that a squeezed element is wrong and says
+ * nothing about it.  So a frame that reported its child's size would be grown
+ * to hold that child and would never crop anything.  Reporting zero leaves the
+ * frame exactly as big as the cell, and clipToBounds does the rest.
+ *
+ * This is the shape a scroll viewer's inside has, minus the scrolling.
+ */
+class Viewport : Element
+{
+    this()
+    {
+        clipToBounds = true;
+    }
+
+protected:
+    override Size measureOverride(Size availableSize)
+    {
+        auto view = children;
+
+        foreach (i; 0 .. view.length)
+            view[i].measure(availableSize);
+
+        return Size(0, 0);
+    }
+
+    override Size arrangeOverride(Size finalSize)
+    {
+        auto view = children;
+
+        foreach (i; 0 .. view.length)
+            view[i].arrange(Rect(0, 0, finalSize.width, finalSize.height));
+
+        return finalSize;
+    }
+}
+
+/**
  * A block of colour that fills whatever room it is given.
  *
  * It draws its own bounds and nothing else, because until there are brushes
@@ -307,10 +350,40 @@ void main()
     // And the picture in the column that takes everything left over, which is
     // the whole point of the grid: drag the window wider and the cherries grow
     // while the stripes stay exactly as wide as they need to be.
-    auto cherries = new Cherries;
-    Grid.setColumn(cherries, 1);
-    Grid.setRow(cherries, 0);
-    layout.addChild(cherries);
+    //
+    // In a frame, because the picture asks for 280 x 300 and a cell smaller
+    // than that hands it over anyway -- arrange grows a small slot rather than
+    // squeezing what is in it.  Without the frame a narrow window would put the
+    // cherries straight over the footer.  Drag it narrow and watch them meet
+    // the edge of the column and stop.
+    auto viewport = new Viewport;
+    viewport.addChild(new Cherries);
+
+    Grid.setColumn(viewport, 1);
+    Grid.setRow(viewport, 0);
+    layout.addChild(viewport);
+
+    // Over the picture rather than in the panel it hides, for the obvious
+    // reason.  It sits in the same cell as the frame and was added after it, so
+    // it is drawn on top and the mouse finds it first -- which is what sibling
+    // order means before anybody sets a zIndex.
+    auto toggle = new HelloButton("Hide the stripes");
+    toggle.horizontalAlignment = HorizontalAlignment.right;
+    toggle.verticalAlignment = VerticalAlignment.top;
+    toggle.margin = Thickness(0, 0, 8, 0);
+
+    Grid.setColumn(toggle, 1);
+    Grid.setRow(toggle, 0);
+    layout.addChild(toggle);
+
+    // One property, and the layout answers: the panel stops being measured, so
+    // the auto column it was holding open closes to nothing, and the star
+    // column beside it takes the width that was freed.  Nothing here moves
+    // anything.
+    toggle.onClick ~= (Element sender, RoutedEventArgs args) {
+        stripes.visible = !stripes.visible;
+        toggle.text = stripes.visible ? "Hide the stripes" : "Bring them back";
+    };
 
     // Along the bottom and across both columns, in the row that is as tall as
     // the text in it -- so the line sits where it sits because of what it is,
