@@ -64,6 +64,14 @@ enum D2D1_DASH_STYLE_DASH_DOT     = 3;
 enum D2D1_DASH_STYLE_DASH_DOT_DOT = 4;
 enum D2D1_DASH_STYLE_CUSTOM       = 5;
 
+// An axis-aligned clip is antialiased along its edges by default, which costs
+// a coverage blend on every edge pixel and buys nothing when the edge falls on
+// a pixel boundary -- which, for a clip taken from an element's own bounds
+// under a translation, is where it falls.  ALIASED is the cheap one and the one
+// Direct2D's own documentation names for this case.
+enum D2D1_ANTIALIAS_MODE_PER_PRIMITIVE = 0;
+enum D2D1_ANTIALIAS_MODE_ALIASED       = 1;
+
 enum HRESULT D2DERR_RECREATE_TARGET = 0x8899000C;
 
 alias D2D1_TAG = ulong;

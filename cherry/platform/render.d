@@ -1145,6 +1145,28 @@ interface DrawingContext
     * keeps the stack the one account of where things are.
     */
     @property Matrix currentTransform();
+
+   /**
+    * Narrows what may be drawn to the given rectangle, in the space in effect.
+    *
+    * Clips nest by intersection: inside two of them what may be drawn is what
+    * both allow.  A push can only ever take room away, so nothing a caller does
+    * with this widens what somebody above it decided.
+    *
+    * The rectangle is axis-aligned **in the space it is given in**, and a
+    * backend is entitled to widen it to a bounding box when the transform in
+    * effect turns it -- Direct2D does exactly that.  Nothing turns anything
+    * today: the only transform the render walk pushes is a translation, and a
+    * translated rectangle is still a rectangle.  The day that stops being true
+    * is the day this needs a mask rather than a rectangle.
+    */
+    void pushClip(Rect region);
+
+   /**
+    * Leaves the clip the matching pushClip entered, going back to what was
+    * allowed before it.  Popping with nothing pushed is a programming error.
+    */
+    void popClip();
 }
 
 /**
@@ -1339,7 +1361,37 @@ version (unittest)
         /// How many pushes are outstanding -- what a test asks after a walk.
         @property size_t depth() { return _transforms.depth; }
 
+       /**
+        * Every clip pushed, in the target's own space, in the order pushed.
+        *
+        * Mapped through the transform in effect like every recorded primitive,
+        * and for the same reason: a test should read the rectangle the backend
+        * would really be given, not the one the caller happened to name.
+        *
+        * What was pushed rather than what is in force -- the nesting is not
+        * intersected here.  A test that cares about the overlap intersects the
+        * entries itself, which is one line and says out loud what it means.
+        */
+        Rect[] clips;
+
+        void pushClip(Rect region)
+        {
+            clips ~= mapBounds(_transforms.current, region);
+            ++_clipDepth;
+        }
+
+        void popClip()
+        {
+            assert(_clipDepth > 0, "popClip with no clip pushed");
+            --_clipDepth;
+        }
+
+        /// How many clips are outstanding -- the other half of a balance check.
+        @property size_t clipDepth() { return _clipDepth; }
+
     private:
+        size_t _clipDepth;
+
         void record(Kind kind, Rect rect, Paint paint, Stroke stroke,
                     float radiusX = 0, float radiusY = 0)
         {
@@ -1595,4 +1647,33 @@ unittest
     assert(context.entries[1].stroke.hasPlainShape);
 
     assert(context.entries[2].stroke.dashStyle == DashStyle.dot);
+}
+
+unittest
+{
+    // A clip is recorded where it really lands, which is through the transform
+    // in effect and not where the caller named it.
+    auto context = new RecordingContext;
+
+    assert(context.clipDepth == 0);
+
+    context.pushTransform(Matrix.translation(100, 50));
+    context.pushClip(Rect(0, 0, 40, 30));
+
+    assert(context.clipDepth == 1);
+    assert(context.clips == [Rect(100, 50, 40, 30)]);
+
+    // Nesting is counted, not intersected: both are on the record as they were
+    // pushed, and a test that wants the overlap says intersect out loud.
+    context.pushClip(Rect(20, 10, 40, 30));
+    assert(context.clipDepth == 2);
+    assert(context.clips[1] == Rect(120, 60, 40, 30));
+    assert(context.clips[0].intersect(context.clips[1]) == Rect(120, 60, 20, 20));
+
+    context.popClip();
+    context.popClip();
+    context.popTransform();
+
+    assert(context.clipDepth == 0, "balanced, which is what a walk has to leave behind");
+    assert(context.clips.length == 2, "and popping does not unrecord anything");
 }

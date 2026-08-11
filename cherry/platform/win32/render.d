@@ -50,6 +50,10 @@ final class D2DWindowRenderer : WindowRenderer
                "every pushTransform must be matched by a popTransform before "
                ~ "the frame ends.");
 
+        assert(_context.clipDepth == 0,
+               "every pushClip must be matched by a popClip before the frame "
+               ~ "ends.");
+
         auto hr = _target.EndDraw(null, null);
 
         if (hr == D2DERR_RECREATE_TARGET)
@@ -348,6 +352,32 @@ private final class D2DDrawingContext : DrawingContext
     }
 
    /*
+    * Aliased, because the clips this framework pushes come from element bounds
+    * under a translation and land on whole pixels; antialiasing an edge that is
+    * already sharp costs a blend per edge pixel and changes nothing.
+    *
+    * Direct2D applies the transform in effect to the rectangle and then takes
+    * the axis-aligned box of the result, so under a rotation this clips to more
+    * than was asked for rather than to the turned rectangle.  Nothing rotates
+    * today; when RenderTransform arrives, the honest implementation is
+    * PushLayer with a rectangle geometry as its mask, which costs a layer.
+    */
+    void pushClip(Rect region)
+    {
+        auto area = toRectF(region);
+        _target.PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_ALIASED);
+        ++_clipDepth;
+    }
+
+    void popClip()
+    {
+        assert(_clipDepth > 0, "popClip with no clip pushed");
+
+        _target.PopAxisAlignedClip();
+        --_clipDepth;
+    }
+
+   /*
     * Puts the context back where a frame begins: nothing pushed, the identity
     * in effect, whatever the frame before it left behind.
     *
@@ -365,6 +395,17 @@ private final class D2DDrawingContext : DrawingContext
         _transforms.reset();
         applyTransform();
 
+        // Really popped, not merely forgotten.  A clip lives on the target and
+        // not in this object, so a frame that threw while holding one would
+        // otherwise leave the next frame drawing inside a dead element's
+        // rectangle -- the same failure the transform reset above prevents, and
+        // a quieter one, because everything outside it would simply not appear.
+        while (_clipDepth)
+        {
+            _target.PopAxisAlignedClip();
+            --_clipDepth;
+        }
+
         // The parameters themselves stay on the target across frames; what is
         // forgotten here is only which ones this context believes are in
         // effect, so the first run of text in a frame sets them rather than
@@ -376,6 +417,12 @@ private final class D2DDrawingContext : DrawingContext
     @property size_t transformDepth()
     {
         return _transforms.depth;
+    }
+
+    /// ditto
+    @property size_t clipDepth()
+    {
+        return _clipDepth;
     }
 
 private:
@@ -715,6 +762,11 @@ private:
     CachedGradient[Object]    _gradients;
     ID2D1StrokeStyle[StrokeShape] _strokeStyles;
     TransformStack            _transforms;
+
+    // Not a stack, because there is nothing to remember: a clip is popped by
+    // asking the target to pop one, and the target keeps them itself.  What
+    // this counts is how many of them are ours to pop.
+    size_t _clipDepth;
 
     // Which mode's parameters the target is carrying, or -1 for "not yet
     // said".  An int rather than the enum, because "none of them" is a state
