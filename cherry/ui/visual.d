@@ -64,9 +64,26 @@ class Visual : StyledElement
 
         isHitTestVisibleProperty = Property.register("isHitTestVisible",
             getRtti!bool(), getRtti!Visual(), hitTestMeta);
+
+        // affectsMeasure and not affectsParentMeasure: this changes what the
+        // element itself measures to, and invalidateMeasure walks up from there
+        // on its own.  affectsParentMeasure is for the other case -- a property
+        // that leaves its element's own size alone and changes only what the
+        // parent does with it, which is what Grid.row carries it for.
+        //
+        // A Visual with no layout under it ignores both, the same way it
+        // already ignores affectsRender.
+        PropertyMetadata visibleMeta;
+        visibleMeta.defaultValue = Value(true);
+        visibleMeta.affectsRender = true;
+        visibleMeta.affectsMeasure = true;
+
+        visibleProperty = Property.register("visible",
+            getRtti!bool(), getRtti!Visual(), visibleMeta);
     }
 
     static immutable(Property) isHitTestVisibleProperty;
+    static immutable(Property) visibleProperty;
 
    /**
     * Whether the mouse can find this visual -- and, when it cannot, anything
@@ -84,7 +101,7 @@ class Visual : StyledElement
     * "the same, but deaf" would be a poor trade.
     *
     * It says nothing about being seen.  A visual with this false is drawn
-    * exactly as before; IsVisible, when it exists, is the other question.
+    * exactly as before; `visible` below is the other question.
     */
     @property bool isHitTestVisible() const
     {
@@ -95,6 +112,35 @@ class Visual : StyledElement
     @property void isHitTestVisible(bool value)
     {
         setValue(isHitTestVisibleProperty, Value(value));
+    }
+
+   /**
+    * Whether this visual is there at all: drawn, findable by the mouse, and
+    * taking up room.
+    *
+    * False collapses it.  It is not drawn, the mouse cannot find it, and -- for
+    * anything that is also an Element -- it is not measured, so it costs its
+    * parent nothing and its neighbours close up over the space it had.
+    *
+    * The whole subtree goes with it, a child whose own `visible` is true
+    * included: what is switched off is the layer, not the node.  That is the
+    * same rule isHitTestVisible follows, and it is the only rule that makes
+    * hiding a panel mean what everybody expects it to mean.
+    *
+    * Not `isVisible`.  The `is` reads as a question about a state being
+    * observed -- isPressed, isFocused, isMouseOver are all answers the
+    * framework writes -- and this is not one of those: it is an attribute, set
+    * by whoever is building the window.
+    */
+    @property bool visible() const
+    {
+        return getValue(visibleProperty).get!bool;
+    }
+
+    /// ditto
+    @property void visible(bool value)
+    {
+        setValue(visibleProperty, Value(value));
     }
 
    /**
@@ -215,6 +261,12 @@ class Visual : StyledElement
         assert(context !is null);
     }
     do {
+        // Before the push rather than after it, so that a collapsed visual
+        // costs the walk one property read and nothing else -- and so that its
+        // children are never reached, whatever their own answer would be.
+        if (!visible)
+            return;
+
         context.pushTransform(Matrix.translation(_arrangedRect.x, _arrangedRect.y));
         scope (exit) context.popTransform();
 
@@ -306,7 +358,9 @@ class Visual : StyledElement
     */
     Visual hitTest(Point point)
     {
-        if (!isHitTestVisible)
+        // Two refusals for two different reasons, and the subtree goes with
+        // either: one layer is not there at all, the other is there and deaf.
+        if (!visible || !isHitTestVisible)
             return null;
 
         immutable local = Point(point.x - _arrangedRect.x, point.y - _arrangedRect.y);
@@ -734,4 +788,54 @@ unittest
 
     node.clearValue(Visual.isHitTestVisibleProperty);
     assert(node.isHitTestVisible);
+}
+
+unittest
+{
+    // A visual that is not there is neither drawn nor found, and its children
+    // go with it -- the layer is switched off, not the one node.
+    auto root = new Node("root", Rect(0, 0, 200, 200));
+    auto under = new Node("under", Rect(0, 0, 200, 200));
+    auto panel = new Node("panel", Rect(0, 0, 200, 200));
+    auto label = new Node("label", Rect(50, 50, 40, 20));
+    root.add(under);
+    root.add(panel);
+    panel.add(label);
+
+    assert(root.hitTest(Point(60, 60)) is label, "the topmost thing there");
+
+    panel.visible = false;
+
+    renderLog = null;
+    root.renderSubtree(new RecordingContext);
+    assert(renderLog == ["root", "under"], "the panel is gone and its label with it");
+
+    assert(root.hitTest(Point(60, 60)) is under, "so what is behind answers");
+
+    // The label never stopped being visible in its own right.  Nobody asked it.
+    assert(label.visible);
+
+    // Which is the difference from a deaf layer: that one is still drawn.
+    panel.visible = true;
+    panel.isHitTestVisible = false;
+
+    renderLog = null;
+    root.renderSubtree(new RecordingContext);
+    assert(renderLog == ["root", "under", "panel", "label"]);
+    assert(root.hitTest(Point(60, 60)) is under);
+}
+
+unittest
+{
+    // On by default, and an ordinary property in every other respect.
+    auto node = new Node;
+
+    assert(node.visible);
+    assert(!node.hasLocalValue(Visual.visibleProperty));
+
+    node.visible = false;
+    assert(node.hasLocalValue(Visual.visibleProperty));
+
+    node.clearValue(Visual.visibleProperty);
+    assert(node.visible);
 }
