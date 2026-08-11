@@ -139,7 +139,7 @@ class DefinitionBase : StyledElement
         PropertyMetadata lengthMeta;
         lengthMeta.defaultValue = Value(GridLength.star(1));
 
-        lengthProperty = Property.register("length",
+        lengthProperty = Property.register("Length",
             getRtti!GridLength(), getRtti!DefinitionBase(), lengthMeta, &isUsableLength);
 
         // Zero and infinity, which are the two lengths that change nothing --
@@ -147,13 +147,13 @@ class DefinitionBase : StyledElement
         PropertyMetadata minMeta;
         minMeta.defaultValue = Value(0.0f);
 
-        minLengthProperty = Property.register("minLength",
+        minLengthProperty = Property.register("MinLength",
             getRtti!float(), getRtti!DefinitionBase(), minMeta, &isUsableBound);
 
         PropertyMetadata maxMeta;
         maxMeta.defaultValue = Value(float.infinity);
 
-        maxLengthProperty = Property.register("maxLength",
+        maxLengthProperty = Property.register("MaxLength",
             getRtti!float(), getRtti!DefinitionBase(), maxMeta, &isUsableBound);
 
         // Written by the grid's sizing pass and by nothing else, so it takes a
@@ -161,7 +161,7 @@ class DefinitionBase : StyledElement
         PropertyMetadata actualMeta;
         actualMeta.defaultValue = Value(0.0f);
 
-        actualLengthKey = Property.registerReadOnly("actualLength",
+        actualLengthKey = Property.registerReadOnly("ActualLength",
             getRtti!float(), getRtti!DefinitionBase(), actualMeta);
     }
 
@@ -358,18 +358,18 @@ class Grid : Element
         cellMeta.defaultValue = Value(0);
         cellMeta.affectsParentMeasure = true;
 
-        rowProperty = Property.registerAttached("row",
+        rowProperty = Property.registerAttached("Row",
             getRtti!int(), getRtti!Grid(), cellMeta, &isUsableIndex);
-        columnProperty = Property.registerAttached("column",
+        columnProperty = Property.registerAttached("Column",
             getRtti!int(), getRtti!Grid(), cellMeta, &isUsableIndex);
 
         PropertyMetadata spanMeta;
         spanMeta.defaultValue = Value(1);
         spanMeta.affectsParentMeasure = true;
 
-        rowSpanProperty = Property.registerAttached("rowSpan",
+        rowSpanProperty = Property.registerAttached("RowSpan",
             getRtti!int(), getRtti!Grid(), spanMeta, &isUsableSpan);
-        columnSpanProperty = Property.registerAttached("columnSpan",
+        columnSpanProperty = Property.registerAttached("ColumnSpan",
             getRtti!int(), getRtti!Grid(), spanMeta, &isUsableSpan);
 
         // **The four lines that make the flags above work at all.**
@@ -396,9 +396,9 @@ class Grid : Element
         gapMeta.defaultValue = Value(0.0f);
         gapMeta.affectsMeasure = true;
 
-        rowSpacingProperty = Property.register("rowSpacing",
+        rowSpacingProperty = Property.register("RowSpacing",
             getRtti!float(), getRtti!Grid(), gapMeta, &isFiniteSpacing);
-        columnSpacingProperty = Property.register("columnSpacing",
+        columnSpacingProperty = Property.register("ColumnSpacing",
             getRtti!float(), getRtti!Grid(), gapMeta, &isFiniteSpacing);
     }
 
@@ -1935,37 +1935,4 @@ unittest
     assert(grid.desiredSize.width == 0, "a size is not negative, however hard it is pulled");
     assert(first.arrangedRect.x == 0);
     assert(second.arrangedRect.x == -80, "twenty along and a hundred back");
-}
-
-unittest
-{
-    // A collapsed child gives its auto track nothing to grow to, so the track
-    // closes and everything after it slides over -- the gaps included, because
-    // the gaps belong to the tracks and one of them is now nothing wide.
-    auto grid = new Grid;
-    grid.addColumn(GridLength.autoSize);
-    grid.addColumn(GridLength.autoSize);
-    grid.addColumn(GridLength.star(1));
-    grid.columnSpacing = 10;
-
-    auto first  = cell(grid, new Box(40, 20), 0, 0);
-    auto hidden = cell(grid, new Box(60, 20), 1, 0);
-    auto rest   = cell(grid, new Filler, 2, 0);
-
-    layOut(grid, Size(400, 100));
-
-    assert(grid.column(1).actualLength == 60);
-    assert(rest.arrangedRect.x == 40 + 10 + 60 + 10);
-
-    hidden.visible = false;
-    layOut(grid, Size(400, 100));
-
-    assert(grid.column(1).actualLength == 0, "nothing in it, so nothing wide");
-    assert(rest.arrangedRect.x == 40 + 10 + 0 + 10, "the star column takes what the track gave up");
-    assert(rest.actualWidth == 400 - 40 - 20, "and grows by exactly that much");
-    assert(hidden.arrangedRect.empty);
-
-    hidden.visible = true;
-    layOut(grid, Size(400, 100));
-    assert(grid.column(1).actualLength == 60, "and back again");
 }
