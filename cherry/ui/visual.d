@@ -80,10 +80,25 @@ class Visual : StyledElement
 
         visibleProperty = Property.register("visible",
             getRtti!bool(), getRtti!Visual(), visibleMeta);
+
+        // Off, so that overflow is seen rather than quietly cut away.  A
+        // container that means to hold its content in says so; one that did not
+        // mean to overflow finds out that it does.  WPF's ClipToBounds and
+        // Avalonia's both default the same way.
+        //
+        // Only affectsRender: what a visual clips away changes its pixels and
+        // nothing about its size or its parent's.
+        PropertyMetadata clipMeta;
+        clipMeta.defaultValue = Value(false);
+        clipMeta.affectsRender = true;
+
+        clipToBoundsProperty = Property.register("clipToBounds",
+            getRtti!bool(), getRtti!Visual(), clipMeta);
     }
 
     static immutable(Property) isHitTestVisibleProperty;
     static immutable(Property) visibleProperty;
+    static immutable(Property) clipToBoundsProperty;
 
    /**
     * Whether the mouse can find this visual -- and, when it cannot, anything
@@ -141,6 +156,37 @@ class Visual : StyledElement
     @property void visible(bool value)
     {
         setValue(visibleProperty, Value(value));
+    }
+
+   /**
+    * Whether this visual holds its drawing, and its children's, inside its own
+    * bounds.
+    *
+    * Off by default: a visual that draws outside itself is seen doing it, which
+    * is how overflow gets noticed instead of being silently trimmed.  Turning
+    * it on is a container saying that what it holds is its own business --
+    * which is what anything that scrolls has to say before it can scroll.
+    *
+    * The bounds are arrangedRect's size at the origin, not renderBounds.  The
+    * two differ exactly where a visual claims to draw outside its box, and
+    * agreeing with that claim here would make the property do nothing in the
+    * one case it was asked for.
+    *
+    * It cuts input as well as pixels: what cannot be seen because this clipped
+    * it away cannot be clicked either.  That is the assumption the search in
+    * hitTest is finally allowed to make -- without a clip it has to walk into
+    * children that lie outside their parent, because they really are drawn out
+    * there.
+    */
+    @property bool clipToBounds() const
+    {
+        return getValue(clipToBoundsProperty).get!bool;
+    }
+
+    /// ditto
+    @property void clipToBounds(bool value)
+    {
+        setValue(clipToBoundsProperty, Value(value));
     }
 
    /**
@@ -270,6 +316,21 @@ class Visual : StyledElement
         context.pushTransform(Matrix.translation(_arrangedRect.x, _arrangedRect.y));
         scope (exit) context.popTransform();
 
+        // Read once and kept, so that the pop matches the push whatever a
+        // handler somewhere below does to the property in between.  The clip
+        // goes on after the transform, because the rectangle is this visual's
+        // own bounds and those are named in its own space.
+        immutable clips = clipToBounds;
+
+        if (clips)
+            context.pushClip(Rect(0, 0, _arrangedRect.width, _arrangedRect.height));
+
+        // Registered after the transform's, so it runs before it: the clip
+        // comes off first, in the reverse of the order they went on.
+        scope (exit)
+            if (clips)
+                context.popClip();
+
         onRender(context);
 
         foreach (i; 0 .. visualChildCount)
@@ -350,11 +411,12 @@ class Visual : StyledElement
     * itself only when none of its children did.
     *
     * **The search descends into children even when this visual does not contain
-    * the point.** Nothing clips, so renderSubtree draws a child wherever its
+    * the point**, unless it clips.  renderSubtree draws a child wherever its
     * placement puts it -- outside its parent included -- and a child that can be
-    * seen has to be one that can be hit.  It is the obvious thing to optimise
-    * and the optimisation would be wrong; when ClipToBounds arrives, that is
-    * what makes pruning correct rather than a guess.
+    * seen has to be one that can be hit.  Missing the parent is therefore the
+    * obvious thing to prune on and the wrong thing to prune on; clipToBounds is
+    * what makes the pruning true rather than a guess, because it is the parent
+    * saying that nothing outside it was drawn in the first place.
     */
     Visual hitTest(Point point)
     {
@@ -364,6 +426,14 @@ class Visual : StyledElement
             return null;
 
         immutable local = Point(point.x - _arrangedRect.x, point.y - _arrangedRect.y);
+
+        // The pruning the paragraph above says is only correct with a clip.
+        // Against the bounds and not containsPoint: a Shape answering for its
+        // own round outline is saying which of its pixels are it, and the clip
+        // is about which pixels exist at all.
+        if (clipToBounds
+            && !Rect(0, 0, _arrangedRect.width, _arrangedRect.height).contains(local))
+            return null;
 
         foreach_reverse (i; 0 .. visualChildCount)
             if (auto hit = visualChild(i).hitTest(local))
@@ -838,4 +908,70 @@ unittest
 
     node.clearValue(Visual.visibleProperty);
     assert(node.visible);
+}
+
+unittest
+{
+    // A clip goes on inside the visual's own space and comes off again, and it
+    // is its bounds that are pushed rather than anything a child asked for.
+    auto root = new Node("root", Rect(10, 20, 200, 100));
+    auto inner = new Node("inner", Rect(5, 5, 60, 40));
+    root.add(inner);
+
+    inner.clipToBounds = true;
+
+    auto context = new RecordingContext;
+    root.renderSubtree(context);
+
+    assert(context.clips == [Rect(15, 25, 60, 40)],
+           "the child's own bounds, at the origin its placement gives it");
+    assert(context.clipDepth == 0, "and the walk left the stack as it found it");
+    assert(context.depth == 0);
+}
+
+unittest
+{
+    // Off by default, so a subtree that draws outside itself is still drawn --
+    // and still hit -- exactly where it draws.
+    auto parent = new Node("parent", Rect(0, 0, 50, 50));
+    auto escapee = new Node("escapee", Rect(100, 100, 40, 40));
+    parent.add(escapee);
+
+    assert(parent.hitTest(Point(120, 120)) is escapee, "nobody clipped it");
+
+    parent.clipToBounds = true;
+
+    assert(parent.hitTest(Point(120, 120)) is null,
+           "outside the parent is now outside everything under it");
+    assert(parent.hitTest(Point(25, 25)) is parent, "and inside is unchanged");
+
+    // The parent's own far edge belongs to the neighbour, on the same terms
+    // Rect.contains has everywhere else.
+    assert(parent.hitTest(Point(49, 49)) is parent);
+    assert(parent.hitTest(Point(50, 50)) is null);
+
+    auto context = new RecordingContext;
+    renderLog = null;
+    parent.renderSubtree(context);
+
+    // Still walked and still drawn: what the clip removes is pixels, and the
+    // recorder is not a rasteriser.  What it can show is that the clip was
+    // pushed around the whole subtree.
+    assert(renderLog == ["parent", "escapee"]);
+    assert(context.clips == [Rect(0, 0, 50, 50)]);
+}
+
+unittest
+{
+    // Off by default, and an ordinary property in every other respect.
+    auto node = new Node;
+
+    assert(!node.clipToBounds, "overflow is seen until somebody says otherwise");
+    assert(!node.hasLocalValue(Visual.clipToBoundsProperty));
+
+    node.clipToBounds = true;
+    assert(node.hasLocalValue(Visual.clipToBoundsProperty));
+
+    node.clearValue(Visual.clipToBoundsProperty);
+    assert(!node.clipToBounds);
 }
