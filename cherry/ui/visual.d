@@ -105,12 +105,21 @@ class Visual : StyledElement
 
         zIndexProperty = Property.register("zIndex",
             getRtti!int(), getRtti!Visual(), zMeta);
+
+        // Opaque, which is what everything is until somebody fades it.
+        PropertyMetadata opacityMeta;
+        opacityMeta.defaultValue = Value(1.0f);
+        opacityMeta.affectsRender = true;
+
+        opacityProperty = Property.register("opacity",
+            getRtti!float(), getRtti!Visual(), opacityMeta, &isFraction);
     }
 
     static immutable(Property) isHitTestVisibleProperty;
     static immutable(Property) visibleProperty;
     static immutable(Property) clipToBoundsProperty;
     static immutable(Property) zIndexProperty;
+    static immutable(Property) opacityProperty;
 
    /**
     * Whether the mouse can find this visual -- and, when it cannot, anything
@@ -227,6 +236,41 @@ class Visual : StyledElement
     @property void zIndex(int value)
     {
         setValue(zIndexProperty, Value(value));
+    }
+
+   /**
+    * How much of this visual, and of everything under it, reaches the screen:
+    * 1 is all of it, 0 is none.
+    *
+    * The subtree is faded as one picture and not one visual at a time, so two
+    * overlapping children at half opacity show the background through the pair
+    * rather than each other through the overlap.  That is what makes fading a
+    * panel look like fading a panel.
+    *
+    * **Zero is WPF's Hidden.** Nothing is drawn and nothing can be clicked, and
+    * the room the visual takes is untouched -- its neighbours stay where they
+    * are and the hole stays open.  `visible = false` is the other one: it takes
+    * the room away as well.  Between them they are the three states WPF spells
+    * with an enumeration, arrived at from two properties that were each wanted
+    * anyway.
+    *
+    * Anything below one costs a layer -- an off-screen surface and a second
+    * pass over those pixels -- and one costs nothing at all, which is the case
+    * the walk checks for first.
+    *
+    * Values outside 0 to 1 are refused rather than clamped.  There is no
+    * reading of "opacity 2" that anybody meant, and a write that is quietly
+    * corrected is a bug that surfaces somewhere else.
+    */
+    @property float opacity() const
+    {
+        return getValue(opacityProperty).get!float;
+    }
+
+    /// ditto
+    @property void opacity(float value)
+    {
+        setValue(opacityProperty, Value(value));
     }
 
    /**
@@ -353,6 +397,15 @@ class Visual : StyledElement
         if (!visible)
             return;
 
+        // Fully transparent is fully absent from the screen, so there is
+        // nothing to draw and no layer worth opening to draw it into.  Written
+        // as a refusal so that a NaN that got past the validator lands here
+        // rather than opening a layer nobody can see out of.
+        immutable alpha = opacity;
+
+        if (!(alpha > 0))
+            return;
+
         context.pushTransform(Matrix.translation(_arrangedRect.x, _arrangedRect.y));
         scope (exit) context.popTransform();
 
@@ -370,6 +423,19 @@ class Visual : StyledElement
         scope (exit)
             if (clips)
                 context.popClip();
+
+        // Inside the clip, because what the layer composites is what survived
+        // it -- and because a layer the size of an unclipped subtree is a
+        // bigger surface for the same picture.  Nothing is pushed at full
+        // opacity: that is the case every visual in an ordinary tree is in.
+        immutable fades = alpha < 1;
+
+        if (fades)
+            context.pushOpacity(alpha);
+
+        scope (exit)
+            if (fades)
+                context.popOpacity();
 
         onRender(context);
 
@@ -462,9 +528,16 @@ class Visual : StyledElement
     */
     Visual hitTest(Point point)
     {
-        // Two refusals for two different reasons, and the subtree goes with
-        // either: one layer is not there at all, the other is there and deaf.
-        if (!visible || !isHitTestVisible)
+        // Three refusals for three different reasons, and the subtree goes with
+        // each: one layer is not there at all, one is there and deaf, and one
+        // has nothing on the screen to aim at.
+        //
+        // That last one is a choice, and WPF made the other: there, a fully
+        // transparent element still catches the mouse.  What is invisible is
+        // not clickable reads better than the rule it replaces, and anything
+        // that really wants to draw nothing and still take input says so with
+        // isHitTestVisible left alone and nothing drawn.
+        if (!visible || !isHitTestVisible || !(opacity > 0))
             return null;
 
         immutable local = Point(point.x - _arrangedRect.x, point.y - _arrangedRect.y);
@@ -712,6 +785,19 @@ private:
     // An element that has never been drawn is out of date by definition, so the
     // mark starts raised and only a drain lowers it.
     bool _visualDirty = true;
+}
+
+/*
+ * Whether a number is a share of something: nothing to all of it, and no NaN.
+ *
+ * Written as a pair of comparisons rather than as `>= 0 && <= 1`, so that NaN
+ * is refused by both of them instead of slipping through whichever one it makes
+ * true -- the same shape Rect.empty uses, and for the same reason.
+ */
+private bool isFraction(const(Value) value)
+{
+    immutable share = value.get!float;
+    return share >= 0 && share <= 1;
 }
 
 version (unittest)
@@ -1238,4 +1324,136 @@ unittest
 
     node.clearValue(Visual.zIndexProperty);
     assert(node.zIndex == 0);
+}
+
+unittest
+{
+    // Full opacity costs nothing: no layer is opened for the case every
+    // ordinary visual is in.
+    auto root = new Node("root", Rect(0, 0, 100, 100));
+    auto child = new Node("child", Rect(0, 0, 50, 50));
+    root.add(child);
+
+    auto context = new RecordingContext;
+    renderLog = null;
+    root.renderSubtree(context);
+
+    assert(renderLog == ["root", "child"]);
+    assert(context.opacities.length == 0, "nobody faded anything");
+
+    // Below one, a layer -- one, around the visual and everything under it.
+    child.opacity = 0.25f;
+
+    context = new RecordingContext;
+    renderLog = null;
+    root.renderSubtree(context);
+
+    assert(renderLog == ["root", "child"], "a faded visual is still drawn");
+    assert(context.opacities == [0.25f]);
+    assert(context.opacityDepth == 0, "and the layer came off again");
+}
+
+unittest
+{
+    // Nested layers, one per visual: the compositing multiplies because each
+    // one composites what the one inside it produced.
+    auto root = new Node("root", Rect(0, 0, 100, 100));
+    auto middle = new Node("middle", Rect(0, 0, 100, 100));
+    auto inner = new Node("inner", Rect(0, 0, 100, 100));
+    root.add(middle);
+    middle.add(inner);
+
+    middle.opacity = 0.5f;
+    inner.opacity = 0.5f;
+
+    auto context = new RecordingContext;
+    root.renderSubtree(context);
+
+    assert(context.opacities == [0.5f, 0.5f], "as asked for, not multiplied here");
+    assert(context.opacityDepth == 0);
+}
+
+unittest
+{
+    // Zero is WPF's Hidden: nothing drawn, nothing clickable, and the room it
+    // takes is nobody else's.
+    auto root = new Node("root", Rect(0, 0, 200, 200));
+    auto under = new Node("under", Rect(0, 0, 200, 200));
+    auto ghost = new Node("ghost", Rect(0, 0, 200, 200));
+    auto label = new Node("label", Rect(50, 50, 40, 20));
+    root.add(under);
+    root.add(ghost);
+    ghost.add(label);
+
+    assert(root.hitTest(Point(60, 60)) is label);
+
+    ghost.opacity = 0;
+
+    auto context = new RecordingContext;
+    renderLog = null;
+    root.renderSubtree(context);
+
+    assert(renderLog == ["root", "under"], "nothing to draw, so nothing was drawn");
+    assert(context.opacities.length == 0, "and no layer opened to draw it into");
+    assert(root.hitTest(Point(60, 60)) is under, "and nothing to click either");
+
+    // Which is the difference from collapsing it: the placement is untouched.
+    assert(ghost.arrangedRect == Rect(0, 0, 200, 200));
+}
+
+unittest
+{
+    // A visual that throws out of the middle of a frame leaves the context as
+    // it found it.  This is the test that fails the day somebody replaces a
+    // scope (exit) with a line after the call.
+    import std.exception : assertThrown;
+
+    static class Thrower : Node
+    {
+        this()
+        {
+            super("thrower", Rect(0, 0, 50, 50));
+        }
+
+        protected override void onRender(DrawingContext context)
+        {
+            throw new Exception("out of the middle of a frame");
+        }
+    }
+
+    auto root = new Node("root", Rect(0, 0, 200, 200));
+    auto thrower = new Thrower;
+    root.add(thrower);
+
+    thrower.clipToBounds = true;
+    thrower.opacity = 0.5f;
+
+    auto context = new RecordingContext;
+    assertThrown(root.renderSubtree(context));
+
+    assert(context.clipDepth == 0, "the clip came off");
+    assert(context.opacityDepth == 0, "and the layer");
+    assert(context.depth == 0, "and the transform under both of them");
+}
+
+unittest
+{
+    // A share of something, and nothing else.
+    import std.exception : assertThrown;
+
+    auto node = new Node;
+
+    assert(node.opacity == 1, "opaque until somebody fades it");
+    assert(!node.hasLocalValue(Visual.opacityProperty));
+
+    node.opacity = 0.5f;
+    assert(node.opacity == 0.5f);
+
+    assertThrown(node.setValue(Visual.opacityProperty, Value(2.0f)));
+    assertThrown(node.setValue(Visual.opacityProperty, Value(-0.5f)));
+    assertThrown(node.setValue(Visual.opacityProperty, Value(float.nan)));
+    assert(node.opacity == 0.5f, "and every refused write left it alone");
+
+    node.clearValue(Visual.opacityProperty);
+    assert(node.opacity == 1);
 }
