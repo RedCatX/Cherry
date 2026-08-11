@@ -464,11 +464,54 @@ class Visual : StyledElement
         return Point(point.x + offset.x, point.y + offset.y);
     }
 
-    /// ditto
+   /**
+    * ditto
+    *
+    * A plain change of coordinates, with no opinion about whether the region
+    * can be seen there.  clippedToRootSpace is the one that has the opinion.
+    */
     Rect toRootSpace(Rect region)
     {
         immutable offset = originInRoot();
         return Rect(region.x + offset.x, region.y + offset.y, region.width, region.height);
+    }
+
+   /**
+    * Where a region of this visual's own space really lands in the root's:
+    * toRootSpace, cut down by every clipping ancestor on the way up.
+    *
+    * The answer is empty when the region is drawn nowhere at all -- when some
+    * ancestor clips it away entirely -- and `Rect.init` is what "nowhere" comes
+    * back as, so `empty` recognises it without a second test.
+    *
+    * This is what the repaint queue asks, and the reason it exists as a second
+    * method rather than as an improvement to the first: a coordinate mapping
+    * that silently returned less than it was given would be a poor mapping.
+    * Here the narrowing is the point -- a region nobody can see is a region
+    * nobody has to redraw, and before there was clipping there was no such
+    * region and nothing to narrow.
+    *
+    * A visual's own clip counts, not only its ancestors'.  renderSubtree pushes
+    * the clip before onRender, so a visual that clips clips itself too.
+    */
+    Rect clippedToRootSpace(Rect region)
+    {
+        for (Visual v = this; v !is null; v = v.visualParent)
+        {
+            if (v.clipToBounds)
+                region = region.intersect(
+                    Rect(0, 0, v._arrangedRect.width, v._arrangedRect.height));
+
+            if (region.empty)
+                return Rect.init;
+
+            // Up into the parent's space, which is the same step renderSubtree
+            // takes downwards when it pushes this visual's placement.
+            region.x += v._arrangedRect.x;
+            region.y += v._arrangedRect.y;
+        }
+
+        return region;
     }
 
    /**
@@ -959,6 +1002,43 @@ unittest
     // pushed around the whole subtree.
     assert(renderLog == ["parent", "escapee"]);
     assert(context.clips == [Rect(0, 0, 50, 50)]);
+}
+
+unittest
+{
+    // Where a region really lands: the origins compose down the chain, and
+    // every clip on the way cuts what is left of it.
+    auto root = new Node("root", Rect(0, 0, 300, 300));
+    auto frame = new Node("frame", Rect(10, 10, 100, 100));
+    auto inner = new Node("inner", Rect(20, 20, 200, 200));
+    root.add(frame);
+    frame.add(inner);
+
+    immutable whole = Rect(0, 0, 200, 200);
+
+    // With nothing clipping the two answers agree, however far outside its
+    // ancestors the region reaches.
+    assert(inner.clippedToRootSpace(whole) == Rect(30, 30, 200, 200));
+    assert(inner.clippedToRootSpace(whole) == inner.toRootSpace(whole));
+
+    frame.clipToBounds = true;
+
+    // The frame is 100 wide at (10, 10); inner starts 20 into it, so 80 of
+    // inner's own 200 survive.
+    assert(inner.clippedToRootSpace(whole) == Rect(30, 30, 80, 80));
+    assert(inner.toRootSpace(whole) == Rect(30, 30, 200, 200), "and the mapping still says what it always said");
+
+    // Entirely outside the clip is nowhere at all, and nowhere is Rect.init.
+    assert(inner.clippedToRootSpace(Rect(100, 100, 50, 50)) == Rect.init);
+    assert(inner.clippedToRootSpace(Rect(100, 100, 50, 50)).empty);
+
+    // A visual's own clip counts too, because it clips its own drawing as well
+    // as its children's.
+    frame.clipToBounds = false;
+    inner.clipToBounds = true;
+
+    assert(inner.clippedToRootSpace(Rect(0, 0, 300, 300)) == Rect(30, 30, 200, 200),
+           "cut to its own bounds before it was moved anywhere");
 }
 
 unittest

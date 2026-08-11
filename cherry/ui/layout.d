@@ -325,7 +325,18 @@ private:
                 if (own.empty)
                     continue;
 
-                immutable region = visual.toRootSpace(own);
+                // Cut down by every clipping ancestor on the way up, which is
+                // the first time a declared region is checked against anything
+                // rather than taken at its word.  Nothing was lying: a region
+                // outside a clip really was going to be drawn there, until an
+                // ancestor said that nothing of its children reaches outside
+                // itself.  Repainting it would be repainting the ancestor's
+                // background for no reason.
+                immutable region = visual.clippedToRootSpace(own);
+
+                if (region.empty)
+                    continue;
+
                 auto root = visual.visualRoot;
 
                 // A linear scan and not an associative array: the distinct
@@ -867,6 +878,78 @@ unittest
         // spans the pair.
         assert(surface.repaints[0] == a.toRootSpace(a.renderBounds)
                                        .unite(b.toRootSpace(b.renderBounds)));
+    });
+}
+
+unittest
+{
+    // A clipping ancestor cuts the region down, because what it clipped away
+    // was never going to be drawn and does not have to be drawn again.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto frame = new Element;
+        auto child = new Element;
+        surface.addChild(frame);
+        frame.addChild(child);
+
+        frame.width = 100;
+        frame.height = 100;
+        frame.horizontalAlignment = HorizontalAlignment.left;
+        frame.verticalAlignment = VerticalAlignment.top;
+
+        child.width = 400;
+        child.height = 400;
+        child.horizontalAlignment = HorizontalAlignment.left;
+        child.verticalAlignment = VerticalAlignment.top;
+
+        settle(surface);
+        surface.repaints = null;
+
+        child.invalidateVisual();
+        surface.updateLayout();
+
+        assert(surface.repaints[0] == Rect(0, 0, 400, 400), "nothing clips, so all of it");
+
+        frame.clipToBounds = true;
+        settle(surface);
+        surface.repaints = null;
+
+        child.invalidateVisual();
+        surface.updateLayout();
+
+        assert(surface.repaints[0] == Rect(0, 0, 100, 100), "cut to the frame");
+    });
+}
+
+unittest
+{
+    // And a region clipped away entirely asks for nothing at all -- the visual
+    // is still taken off the queue and still marked valid, because it was
+    // asked and answered.
+    withDispatcher((shared(Dispatcher) d, ManualEventLoop loop) {
+        auto surface = new Surface;
+        auto frame = new Element;
+        auto child = new Element;
+        surface.addChild(frame);
+        frame.addChild(child);
+
+        frame.width = 100;
+        frame.height = 100;
+        frame.horizontalAlignment = HorizontalAlignment.left;
+        frame.verticalAlignment = VerticalAlignment.top;
+        frame.clipToBounds = true;
+
+        settle(surface);
+        surface.repaints = null;
+
+        // Well outside the frame, in the child's own space.
+        child.invalidateVisual(Rect(500, 500, 20, 20));
+        assert(!child.isVisualValid);
+
+        surface.updateLayout();
+
+        assert(surface.repaints.length == 0, "drawn nowhere, so redrawn nowhere");
+        assert(child.isVisualValid, "asked, answered, and off the queue");
     });
 }
 
