@@ -1936,3 +1936,36 @@ unittest
     assert(first.arrangedRect.x == 0);
     assert(second.arrangedRect.x == -80, "twenty along and a hundred back");
 }
+
+unittest
+{
+    // A collapsed child gives its auto track nothing to grow to, so the track
+    // closes and everything after it slides over -- the gaps included, because
+    // the gaps belong to the tracks and one of them is now nothing wide.
+    auto grid = new Grid;
+    grid.addColumn(GridLength.autoSize);
+    grid.addColumn(GridLength.autoSize);
+    grid.addColumn(GridLength.star(1));
+    grid.columnSpacing = 10;
+
+    auto first  = cell(grid, new Box(40, 20), 0, 0);
+    auto hidden = cell(grid, new Box(60, 20), 1, 0);
+    auto rest   = cell(grid, new Filler, 2, 0);
+
+    layOut(grid, Size(400, 100));
+
+    assert(grid.column(1).actualLength == 60);
+    assert(rest.arrangedRect.x == 40 + 10 + 60 + 10);
+
+    hidden.visible = false;
+    layOut(grid, Size(400, 100));
+
+    assert(grid.column(1).actualLength == 0, "nothing in it, so nothing wide");
+    assert(rest.arrangedRect.x == 40 + 10 + 0 + 10, "the star column takes what the track gave up");
+    assert(rest.actualWidth == 400 - 40 - 20, "and grows by exactly that much");
+    assert(hidden.arrangedRect.empty);
+
+    hidden.visible = true;
+    layOut(grid, Size(400, 100));
+    assert(grid.column(1).actualLength == 60, "and back again");
+}
