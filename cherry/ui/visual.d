@@ -94,11 +94,23 @@ class Visual : StyledElement
 
         clipToBoundsProperty = Property.register("clipToBounds",
             getRtti!bool(), getRtti!Visual(), clipMeta);
+
+        // affectsRender on the visual itself and nothing about its parent.
+        // Raising a child above its sibling changes pixels only where the two
+        // overlap, and that is inside this child's own bounds -- which is what
+        // its own repaint request covers.
+        PropertyMetadata zMeta;
+        zMeta.defaultValue = Value(0);
+        zMeta.affectsRender = true;
+
+        zIndexProperty = Property.register("zIndex",
+            getRtti!int(), getRtti!Visual(), zMeta);
     }
 
     static immutable(Property) isHitTestVisibleProperty;
     static immutable(Property) visibleProperty;
     static immutable(Property) clipToBoundsProperty;
+    static immutable(Property) zIndexProperty;
 
    /**
     * Whether the mouse can find this visual -- and, when it cannot, anything
@@ -187,6 +199,34 @@ class Visual : StyledElement
     @property void clipToBounds(bool value)
     {
         setValue(clipToBoundsProperty, Value(value));
+    }
+
+   /**
+    * Which of its siblings this visual is drawn over: higher is nearer the
+    * viewer, and equal means the order they sit in the tree.
+    *
+    * Only siblings are compared.  A child never leaves its parent's layer,
+    * whatever number it carries -- so a zIndex of a thousand raises something
+    * above the things beside it and never above the panel next door.  WPF's
+    * Panel.ZIndex and Avalonia's Visual.ZIndex both work this way, and the
+    * alternative -- one order across the whole tree -- would mean a control
+    * could be split in half by a stranger drawing between its parts.
+    *
+    * The mouse follows the same order backwards, because what is on top is
+    * what a click lands on.
+    *
+    * Ordinary trees leave this at zero, and the walk that draws them notices
+    * and does not sort at all.
+    */
+    @property int zIndex() const
+    {
+        return getValue(zIndexProperty).get!int;
+    }
+
+    /// ditto
+    @property void zIndex(int value)
+    {
+        setValue(zIndexProperty, Value(value));
     }
 
    /**
@@ -333,8 +373,10 @@ class Visual : StyledElement
 
         onRender(context);
 
+        auto order = drawOrder();
+
         foreach (i; 0 .. visualChildCount)
-            visualChild(i).renderSubtree(context);
+            visualChild(order.length ? order[i] : i).renderSubtree(context);
     }
 
    /**
@@ -435,8 +477,10 @@ class Visual : StyledElement
             && !Rect(0, 0, _arrangedRect.width, _arrangedRect.height).contains(local))
             return null;
 
+        auto order = drawOrder();
+
         foreach_reverse (i; 0 .. visualChildCount)
-            if (auto hit = visualChild(i).hitTest(local))
+            if (auto hit = visualChild(order.length ? order[i] : i).hitTest(local))
                 return hit;
 
         return containsPoint(local) ? this : null;
@@ -598,6 +642,55 @@ protected:
     Rect _arrangedRect;
 
 private:
+   /*
+    * The order to visit the children in, back to front, or an empty slice when
+    * that is simply the order they are already in.
+    *
+    * The empty answer is the ordinary one and the reason for the scan: a tree
+    * where nobody set a zIndex allocates nothing and compares nothing, which is
+    * every tree until somebody wants a thing on top.  Both walks read it the
+    * same way, and that is what keeps the drawing order and the hit order from
+    * drifting apart -- they cannot, because there is one answer.
+    *
+    * The scan itself is one property read per child per walk.  Keeping a flag
+    * on the parent instead would need a child's change to reach its parent, and
+    * a stale flag is a wrong z-order that nothing catches; this is the cheap
+    * thing that cannot go stale.
+    */
+    size_t[] drawOrder()
+    {
+        immutable count = visualChildCount;
+        bool ordered;
+
+        foreach (i; 0 .. count)
+        {
+            if (visualChild(i).zIndex != 0)
+            {
+                ordered = true;
+                break;
+            }
+        }
+
+        if (!ordered)
+            return null;
+
+        auto order = new size_t[count];
+
+        foreach (i; 0 .. count)
+            order[i] = i;
+
+        import std.algorithm.mutation : SwapStrategy;
+        import std.algorithm.sorting : sort;
+
+        // Stable, so that equal children keep the order they were added in --
+        // which is the order the rest of this file means by "the last one drawn
+        // is the one on top".
+        sort!((a, b) => visualChild(a).zIndex < visualChild(b).zIndex,
+              SwapStrategy.stable)(order);
+
+        return order;
+    }
+
    /*
     * Where this visual's own origin sits in the root's space: the sum of every
     * placement from the root down to and including this one.
@@ -1054,4 +1147,95 @@ unittest
 
     node.clearValue(Visual.clipToBoundsProperty);
     assert(!node.clipToBounds);
+}
+
+unittest
+{
+    // zIndex reorders the drawing, and the mouse follows it backwards: the two
+    // walks read one answer, so they cannot disagree.
+    auto root = new Node("root", Rect(0, 0, 200, 200));
+    auto first = new Node("first", Rect(0, 0, 100, 100));
+    auto second = new Node("second", Rect(0, 0, 100, 100));
+    root.add(first);
+    root.add(second);
+
+    renderLog = null;
+    root.renderSubtree(new RecordingContext);
+    assert(renderLog == ["root", "first", "second"], "tree order until told otherwise");
+    assert(root.hitTest(Point(50, 50)) is second, "and the last one drawn is on top");
+
+    first.zIndex = 1;
+
+    renderLog = null;
+    root.renderSubtree(new RecordingContext);
+    assert(renderLog == ["root", "second", "first"], "raised above the one after it");
+    assert(root.hitTest(Point(50, 50)) is first, "and the mouse turned round with it");
+
+    // Negative works from the other end, and clearing puts it back.
+    first.clearValue(Visual.zIndexProperty);
+    second.zIndex = -1;
+
+    renderLog = null;
+    root.renderSubtree(new RecordingContext);
+    assert(renderLog == ["root", "second", "first"]);
+    assert(root.hitTest(Point(50, 50)) is first);
+}
+
+unittest
+{
+    // Equal children keep the order they were added in, which is what makes the
+    // sort worth insisting is stable: three at one level and one raised over
+    // them must leave the three where they were.
+    auto root = new Node("root", Rect(0, 0, 200, 200));
+    auto a = new Node("a", Rect(0, 0, 100, 100));
+    auto b = new Node("b", Rect(0, 0, 100, 100));
+    auto c = new Node("c", Rect(0, 0, 100, 100));
+    auto top = new Node("top", Rect(0, 0, 100, 100));
+    root.add(a);
+    root.add(b);
+    root.add(c);
+    root.add(top);
+
+    top.zIndex = 5;
+    b.zIndex = 5;
+
+    renderLog = null;
+    root.renderSubtree(new RecordingContext);
+    assert(renderLog == ["root", "a", "c", "b", "top"],
+           "a and c keep their order, and so do b and top");
+}
+
+unittest
+{
+    // A child never leaves its parent's layer, however high it is raised.
+    auto root = new Node("root", Rect(0, 0, 200, 200));
+    auto left = new Node("left", Rect(0, 0, 200, 200));
+    auto right = new Node("right", Rect(0, 0, 200, 200));
+    auto raised = new Node("raised", Rect(0, 0, 200, 200));
+    root.add(left);
+    root.add(right);
+    left.add(raised);
+
+    raised.zIndex = 1000;
+
+    renderLog = null;
+    root.renderSubtree(new RecordingContext);
+    assert(renderLog == ["root", "left", "raised", "right"], "still under its uncle");
+    assert(root.hitTest(Point(50, 50)) is right);
+}
+
+unittest
+{
+    // Zero by default, and an ordinary property in every other respect.
+    auto node = new Node;
+
+    assert(node.zIndex == 0);
+    assert(!node.hasLocalValue(Visual.zIndexProperty));
+
+    node.zIndex = -3;
+    assert(node.zIndex == -3);
+    assert(node.hasLocalValue(Visual.zIndexProperty));
+
+    node.clearValue(Visual.zIndexProperty);
+    assert(node.zIndex == 0);
 }
