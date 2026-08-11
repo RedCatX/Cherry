@@ -43,47 +43,47 @@ class Pen : StyledElement
         PropertyMetadata brushMeta;
         brushMeta.defaultValue = Value.init;
 
-        brushProperty = Property.register("Brush",
+        brushProperty = Property.register("brush",
             getRtti!Brush(), getRtti!Pen(), brushMeta);
 
         PropertyMetadata thicknessMeta;
         thicknessMeta.defaultValue = Value(1.0f);
 
-        thicknessProperty = Property.register("Thickness",
+        thicknessProperty = Property.register("thickness",
             getRtti!float(), getRtti!Pen(), thicknessMeta);
 
         PropertyMetadata dashMeta;
         dashMeta.defaultValue = Value(DashStyle.solid);
 
-        dashStyleProperty = Property.register("DashStyle",
+        dashStyleProperty = Property.register("dashStyle",
             getRtti!DashStyle(), getRtti!Pen(), dashMeta);
 
         PropertyMetadata capMeta;
         capMeta.defaultValue = Value(LineCap.flat);
 
-        startCapProperty = Property.register("StartCap",
+        startCapProperty = Property.register("startCap",
             getRtti!LineCap(), getRtti!Pen(), capMeta);
-        endCapProperty = Property.register("EndCap",
+        endCapProperty = Property.register("endCap",
             getRtti!LineCap(), getRtti!Pen(), capMeta);
-        dashCapProperty = Property.register("DashCap",
+        dashCapProperty = Property.register("dashCap",
             getRtti!LineCap(), getRtti!Pen(), capMeta);
 
         PropertyMetadata joinMeta;
         joinMeta.defaultValue = Value(LineJoin.miter);
 
-        lineJoinProperty = Property.register("LineJoin",
+        lineJoinProperty = Property.register("lineJoin",
             getRtti!LineJoin(), getRtti!Pen(), joinMeta);
 
         PropertyMetadata miterMeta;
         miterMeta.defaultValue = Value(10.0f);
 
-        miterLimitProperty = Property.register("MiterLimit",
+        miterLimitProperty = Property.register("miterLimit",
             getRtti!float(), getRtti!Pen(), miterMeta);
 
         PropertyMetadata offsetMeta;
         offsetMeta.defaultValue = Value(0.0f);
 
-        dashOffsetProperty = Property.register("DashOffset",
+        dashOffsetProperty = Property.register("dashOffset",
             getRtti!float(), getRtti!Pen(), offsetMeta);
     }
 

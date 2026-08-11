@@ -52,9 +52,9 @@ class Control : Element
         brushMeta.defaultValue = Value.init;
         brushMeta.affectsRender = true;
 
-        backgroundProperty = Property.register("Background",
+        backgroundProperty = Property.register("background",
             getRtti!Brush(), getRtti!Control(), brushMeta);
-        borderBrushProperty = Property.register("BorderBrush",
+        borderBrushProperty = Property.register("borderBrush",
             getRtti!Brush(), getRtti!Control(), brushMeta);
 
         // Both of these take room away from the content, so both are a measure
@@ -64,9 +64,9 @@ class Control : Element
         insetMeta.defaultValue = Value(Thickness.init);
         insetMeta.affectsMeasure = true;
 
-        borderThicknessProperty = Property.register("BorderThickness",
+        borderThicknessProperty = Property.register("borderThickness",
             getRtti!Thickness(), getRtti!Control(), insetMeta);
-        paddingProperty = Property.register("Padding",
+        paddingProperty = Property.register("padding",
             getRtti!Thickness(), getRtti!Control(), insetMeta);
 
         // The corners change nothing about how much room anything needs.
@@ -74,7 +74,7 @@ class Control : Element
         radiusMeta.defaultValue = Value(0.0f);
         radiusMeta.affectsRender = true;
 
-        cornerRadiusProperty = Property.register("CornerRadius",
+        cornerRadiusProperty = Property.register("cornerRadius",
             getRtti!float(), getRtti!Control(), radiusMeta, &isUsableRadius);
 
         // What a control is for: being used.  Element says no because most of
@@ -93,7 +93,7 @@ class Control : Element
         penMeta.defaultValue = Value.init;
         penMeta.affectsRender = true;
 
-        focusPenProperty = Property.register("FocusPen",
+        focusPenProperty = Property.register("focusPen",
             getRtti!Pen(), getRtti!Control(), penMeta);
     }
 

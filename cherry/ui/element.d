@@ -69,8 +69,8 @@ class Element : Visual
         sizeMeta.defaultValue = Value.init;
         sizeMeta.affectsMeasure = true;
 
-        widthProperty  = Property.register("Width",  getRtti!float(), getRtti!Element(), sizeMeta);
-        heightProperty = Property.register("Height", getRtti!float(), getRtti!Element(), sizeMeta);
+        widthProperty  = Property.register("width",  getRtti!float(), getRtti!Element(), sizeMeta);
+        heightProperty = Property.register("height", getRtti!float(), getRtti!Element(), sizeMeta);
 
         // The arranged size, written by arrange() and by nothing else: the key
         // stays private, so the only way into these is through the layout pass
@@ -78,8 +78,8 @@ class Element : Visual
         PropertyMetadata actualMeta;
         actualMeta.defaultValue = Value(0.0f);
 
-        actualWidthKey  = Property.registerReadOnly("ActualWidth",  getRtti!float(), getRtti!Element(), actualMeta);
-        actualHeightKey = Property.registerReadOnly("ActualHeight", getRtti!float(), getRtti!Element(), actualMeta);
+        actualWidthKey  = Property.registerReadOnly("actualWidth",  getRtti!float(), getRtti!Element(), actualMeta);
+        actualHeightKey = Property.registerReadOnly("actualHeight", getRtti!float(), getRtti!Element(), actualMeta);
 
         // Written by the input code as the pointer moves and by nothing else,
         // so it takes a key too.
@@ -93,7 +93,7 @@ class Element : Visual
         PropertyMetadata mouseOverMeta;
         mouseOverMeta.defaultValue = Value(false);
 
-        isMouseOverKey = Property.registerReadOnly("IsMouseOver", getRtti!bool(), getRtti!Element(), mouseOverMeta);
+        isMouseOverKey = Property.registerReadOnly("isMouseOver", getRtti!bool(), getRtti!Element(), mouseOverMeta);
 
         // False, so that the elements the keyboard walks are the ones that were
         // built to be walked.  Every container between a control and the window
@@ -103,7 +103,7 @@ class Element : Visual
         PropertyMetadata focusableMeta;
         focusableMeta.defaultValue = Value(false);
 
-        focusableProperty = Property.register("Focusable", getRtti!bool(), getRtti!Element(), focusableMeta);
+        focusableProperty = Property.register("focusable", getRtti!bool(), getRtti!Element(), focusableMeta);
 
         // True, because a focusable element that Tab skips is the exception --
         // something reachable by clicking or by code but deliberately out of
@@ -111,7 +111,7 @@ class Element : Visual
         PropertyMetadata tabStopMeta;
         tabStopMeta.defaultValue = Value(true);
 
-        isTabStopProperty = Property.register("IsTabStop", getRtti!bool(), getRtti!Element(), tabStopMeta);
+        isTabStopProperty = Property.register("isTabStop", getRtti!bool(), getRtti!Element(), tabStopMeta);
 
         // No affectsRender, exactly as IsMouseOver carries none: the element
         // that draws a focus ring says so itself.  Every ancestor of the
@@ -120,7 +120,7 @@ class Element : Visual
         PropertyMetadata focusedMeta;
         focusedMeta.defaultValue = Value(false);
 
-        isFocusedKey = Property.registerReadOnly("IsFocused", getRtti!bool(), getRtti!Element(), focusedMeta);
+        isFocusedKey = Property.registerReadOnly("isFocused", getRtti!bool(), getRtti!Element(), focusedMeta);
 
         // Space the element keeps clear around itself, and therefore part of
         // what it costs its parent: a margin changes the answer measure gives,
@@ -129,7 +129,7 @@ class Element : Visual
         marginMeta.defaultValue = Value(Thickness.init);
         marginMeta.affectsMeasure = true;
 
-        marginProperty = Property.register("Margin", getRtti!Thickness(), getRtti!Element(), marginMeta);
+        marginProperty = Property.register("margin", getRtti!Thickness(), getRtti!Element(), marginMeta);
 
         // Bounds on the size, as plain numbers rather than as the set-or-unset
         // that Width and Height need.  Absence has a number here: 0 is what
@@ -148,10 +148,10 @@ class Element : Visual
         maxMeta.defaultValue = Value(float.infinity);
         maxMeta.affectsMeasure = true;
 
-        minWidthProperty  = Property.register("MinWidth",  getRtti!float(), getRtti!Element(), minMeta);
-        minHeightProperty = Property.register("MinHeight", getRtti!float(), getRtti!Element(), minMeta);
-        maxWidthProperty  = Property.register("MaxWidth",  getRtti!float(), getRtti!Element(), maxMeta);
-        maxHeightProperty = Property.register("MaxHeight", getRtti!float(), getRtti!Element(), maxMeta);
+        minWidthProperty  = Property.register("minWidth",  getRtti!float(), getRtti!Element(), minMeta);
+        minHeightProperty = Property.register("minHeight", getRtti!float(), getRtti!Element(), minMeta);
+        maxWidthProperty  = Property.register("maxWidth",  getRtti!float(), getRtti!Element(), maxMeta);
+        maxHeightProperty = Property.register("maxHeight", getRtti!float(), getRtti!Element(), maxMeta);
 
         // Alignment moves an element inside room it has already been granted
         // and never changes how much it asks for, so it is the cheaper of the
@@ -164,9 +164,9 @@ class Element : Visual
         verticalMeta.defaultValue = Value(VerticalAlignment.stretch);
         verticalMeta.affectsArrange = true;
 
-        horizontalAlignmentProperty = Property.register("HorizontalAlignment",
+        horizontalAlignmentProperty = Property.register("horizontalAlignment",
             getRtti!HorizontalAlignment(), getRtti!Element(), horizontalMeta);
-        verticalAlignmentProperty = Property.register("VerticalAlignment",
+        verticalAlignmentProperty = Property.register("verticalAlignment",
             getRtti!VerticalAlignment(), getRtti!Element(), verticalMeta);
 
         sizeChangedEvent = RoutedEvent.register("SizeChanged", RoutingStrategy.direct, getRtti!Element());
@@ -2051,11 +2051,11 @@ unittest
     PropertyMetadata inheritingMeta;
     inheritingMeta.defaultValue = Value(10);
     inheritingMeta.inherits = true;
-    auto sizeProperty = Property.register("InheritedSize", getRtti!int(), getRtti!Label(), inheritingMeta);
+    auto sizeProperty = Property.register("inheritedSize", getRtti!int(), getRtti!Label(), inheritingMeta);
 
     PropertyMetadata plainMeta;
     plainMeta.defaultValue = Value(7);
-    auto plainProperty = Property.register("PlainSize", getRtti!int(), getRtti!Label(), plainMeta);
+    auto plainProperty = Property.register("plainSize", getRtti!int(), getRtti!Label(), plainMeta);
 
     auto root  = new Element;
     auto panel = new Element;
@@ -2425,9 +2425,9 @@ unittest
             PropertyMetadata plainMeta;
             plainMeta.defaultValue = Value(0);
 
-            sizingProperty = Property.register("Sizing", getRtti!int(), getRtti!Flagged(), measureMeta);
-            placingProperty = Property.register("Placing", getRtti!int(), getRtti!Flagged(), arrangeMeta);
-            idleProperty = Property.register("Idle", getRtti!int(), getRtti!Flagged(), plainMeta);
+            sizingProperty = Property.register("sizing", getRtti!int(), getRtti!Flagged(), measureMeta);
+            placingProperty = Property.register("placing", getRtti!int(), getRtti!Flagged(), arrangeMeta);
+            idleProperty = Property.register("idle", getRtti!int(), getRtti!Flagged(), plainMeta);
         }
 
         static immutable(Property) sizingProperty;
@@ -3143,7 +3143,7 @@ unittest
             renderMeta.defaultValue = Value(0);
             renderMeta.affectsRender = true;
 
-            shadeProperty = Property.register("Shade", getRtti!int(), getRtti!Painted(), renderMeta);
+            shadeProperty = Property.register("shade", getRtti!int(), getRtti!Painted(), renderMeta);
         }
 
         static immutable(Property) shadeProperty;

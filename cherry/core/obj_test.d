@@ -28,16 +28,16 @@ final class Widget : CherryObject
         widthMeta.onCoerceValue = &clampNonNegative;
         widthMeta.onPropertyChanged ~= &onWidthChanged;
 
-        widthProperty = Property.register("Width", getRtti!int(), getRtti!Widget(), widthMeta);
+        widthProperty = Property.register("width", getRtti!int(), getRtti!Widget(), widthMeta);
 
         // A coerce callback that returns the wrong type, so that the check on
         // its result has something to catch.
         PropertyMetadata strayMeta;
         strayMeta.defaultValue = Value(0);
         strayMeta.onCoerceValue = &coerceToText;
-        strayProperty = Property.register("Stray", getRtti!int(), getRtti!Widget(), strayMeta);
-        titleProperty = Property.register("Title", getRtti!string(), getRtti!Widget());
-        evenProperty  = Property.register("Even", getRtti!int(), getRtti!Widget(),
+        strayProperty = Property.register("stray", getRtti!int(), getRtti!Widget(), strayMeta);
+        titleProperty = Property.register("title", getRtti!string(), getRtti!Widget());
+        evenProperty  = Property.register("even", getRtti!int(), getRtti!Widget(),
                                           PropertyMetadata.init, &isEven);
     }
 
@@ -59,7 +59,7 @@ final class Watched : CherryObject
         meta.defaultValue = Value(0);
         meta.onPropertyChanged ~= &recordHandler;
 
-        markProperty = Property.register("Mark", getRtti!int(), getRtti!Watched(), meta);
+        markProperty = Property.register("mark", getRtti!int(), getRtti!Watched(), meta);
     }
 
     static immutable(Property) markProperty;
@@ -199,7 +199,7 @@ unittest
 
     assert(changeLog == ["hook", "handler"],
            "the framework settles its invariants before any handler looks");
-    assert(hookPropertyName == "Mark");
+    assert(hookPropertyName == "mark");
     assert(hookOld.get!int == 0 && hookNew.get!int == 7);
 
     // Only an effective change reaches it, on the same terms as the handlers.

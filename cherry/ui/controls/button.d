@@ -65,7 +65,7 @@ class Button : Control
         textMeta.defaultValue = Value("");
         textMeta.onPropertyChanged ~= &textChanged;
 
-        textProperty = Property.register("Text",
+        textProperty = Property.register("text",
             getRtti!string(), getRtti!Button(), textMeta);
 
         // Written by the press logic and by nothing else, so it takes a key.
@@ -74,7 +74,7 @@ class Button : Control
         PropertyMetadata pressedMeta;
         pressedMeta.defaultValue = Value(false);
 
-        isPressedKey = Property.registerReadOnly("IsPressed",
+        isPressedKey = Property.registerReadOnly("isPressed",
             getRtti!bool(), getRtti!Button(), pressedMeta);
 
         // Neither changes how the button looks or how big it is.  A theme that
@@ -83,9 +83,9 @@ class Button : Control
         PropertyMetadata actionMeta;
         actionMeta.defaultValue = Value(false);
 
-        isDefaultProperty = Property.register("IsDefault",
+        isDefaultProperty = Property.register("isDefault",
             getRtti!bool(), getRtti!Button(), actionMeta);
-        isCancelProperty = Property.register("IsCancel",
+        isCancelProperty = Property.register("isCancel",
             getRtti!bool(), getRtti!Button(), actionMeta);
 
         clickEvent = RoutedEvent.register("Click", RoutingStrategy.bubble, getRtti!Button());

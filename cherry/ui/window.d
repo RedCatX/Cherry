@@ -42,7 +42,7 @@ class Window : Element
         PropertyMetadata titleMeta;
         titleMeta.defaultValue = Value("Window");
         titleMeta.onPropertyChanged ~= &titleChanged;
-        titleProperty = Property.register("Title", getRtti!string(), getRtti!Window(), titleMeta);
+        titleProperty = Property.register("title", getRtti!string(), getRtti!Window(), titleMeta);
 
         // Width and Height belong to Element -- every element has a size, and
         // a window is not the exception.  What differs is what the size means

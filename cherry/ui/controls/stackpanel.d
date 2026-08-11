@@ -72,7 +72,7 @@ class StackPanel : Element
         orientationMeta.defaultValue = Value(Orientation.vertical);
         orientationMeta.affectsMeasure = true;
 
-        orientationProperty = Property.register("Orientation",
+        orientationProperty = Property.register("orientation",
             getRtti!Orientation(), getRtti!StackPanel(), orientationMeta);
 
         // Spacing is summed into the panel's own length, which is why it is a
@@ -83,7 +83,7 @@ class StackPanel : Element
         spacingMeta.defaultValue = Value(0.0f);
         spacingMeta.affectsMeasure = true;
 
-        spacingProperty = Property.register("Spacing",
+        spacingProperty = Property.register("spacing",
             getRtti!float(), getRtti!StackPanel(), spacingMeta, &isFiniteSpacing);
     }
 

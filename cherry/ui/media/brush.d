@@ -86,7 +86,7 @@ class SolidColorBrush : Brush, SolidPaint
         PropertyMetadata colorMeta;
         colorMeta.defaultValue = Value(Color.black);
 
-        colorProperty = Property.register("Color",
+        colorProperty = Property.register("color",
             getRtti!Color(), getRtti!SolidColorBrush(), colorMeta);
     }
 
@@ -127,13 +127,13 @@ abstract class GradientBrush : Brush, GradientPaint
         PropertyMetadata stopsMeta;
         stopsMeta.defaultValue = Value(cast(GradientStop[]) null);
 
-        stopsProperty = Property.register("Stops",
+        stopsProperty = Property.register("stops",
             getRtti!(GradientStop[])(), getRtti!GradientBrush(), stopsMeta);
 
         PropertyMetadata spreadMeta;
         spreadMeta.defaultValue = Value(GradientSpread.pad);
 
-        spreadProperty = Property.register("Spread",
+        spreadProperty = Property.register("spread",
             getRtti!GradientSpread(), getRtti!GradientBrush(), spreadMeta);
     }
 
@@ -190,13 +190,13 @@ class LinearGradientBrush : GradientBrush
         PropertyMetadata startMeta;
         startMeta.defaultValue = Value(Point(0, 0));
 
-        startPointProperty = Property.register("StartPoint",
+        startPointProperty = Property.register("startPoint",
             getRtti!Point(), getRtti!LinearGradientBrush(), startMeta);
 
         PropertyMetadata endMeta;
         endMeta.defaultValue = Value(Point(0, 1));
 
-        endPointProperty = Property.register("EndPoint",
+        endPointProperty = Property.register("endPoint",
             getRtti!Point(), getRtti!LinearGradientBrush(), endMeta);
     }
 
@@ -322,7 +322,7 @@ unittest
     PropertyMetadata meta;
     meta.defaultValue = Value(10);
     meta.inherits = true;
-    auto accent = Property.register("BrushInheritedAccent",
+    auto accent = Property.register("brushInheritedAccent",
         getRtti!int(), getRtti!Owned(), meta);
 
     auto host = new StyledElement;

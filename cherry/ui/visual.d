@@ -62,7 +62,7 @@ class Visual : StyledElement
         PropertyMetadata hitTestMeta;
         hitTestMeta.defaultValue = Value(true);
 
-        isHitTestVisibleProperty = Property.register("IsHitTestVisible",
+        isHitTestVisibleProperty = Property.register("isHitTestVisible",
             getRtti!bool(), getRtti!Visual(), hitTestMeta);
     }
 

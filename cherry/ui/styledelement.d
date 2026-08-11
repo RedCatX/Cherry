@@ -101,7 +101,7 @@ unittest
     PropertyMetadata meta;
     meta.defaultValue = Value(10);
     meta.inherits = true;
-    auto sizeProperty = Property.register("StyledInheritedSize",
+    auto sizeProperty = Property.register("styledInheritedSize",
         getRtti!int(), getRtti!Node(), meta);
 
     auto root  = new Node;

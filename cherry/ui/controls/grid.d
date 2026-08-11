@@ -139,7 +139,7 @@ class DefinitionBase : StyledElement
         PropertyMetadata lengthMeta;
         lengthMeta.defaultValue = Value(GridLength.star(1));
 
-        lengthProperty = Property.register("Length",
+        lengthProperty = Property.register("length",
             getRtti!GridLength(), getRtti!DefinitionBase(), lengthMeta, &isUsableLength);
 
         // Zero and infinity, which are the two lengths that change nothing --
@@ -147,13 +147,13 @@ class DefinitionBase : StyledElement
         PropertyMetadata minMeta;
         minMeta.defaultValue = Value(0.0f);
 
-        minLengthProperty = Property.register("MinLength",
+        minLengthProperty = Property.register("minLength",
             getRtti!float(), getRtti!DefinitionBase(), minMeta, &isUsableBound);
 
         PropertyMetadata maxMeta;
         maxMeta.defaultValue = Value(float.infinity);
 
-        maxLengthProperty = Property.register("MaxLength",
+        maxLengthProperty = Property.register("maxLength",
             getRtti!float(), getRtti!DefinitionBase(), maxMeta, &isUsableBound);
 
         // Written by the grid's sizing pass and by nothing else, so it takes a
@@ -161,7 +161,7 @@ class DefinitionBase : StyledElement
         PropertyMetadata actualMeta;
         actualMeta.defaultValue = Value(0.0f);
 
-        actualLengthKey = Property.registerReadOnly("ActualLength",
+        actualLengthKey = Property.registerReadOnly("actualLength",
             getRtti!float(), getRtti!DefinitionBase(), actualMeta);
     }
 
@@ -358,18 +358,18 @@ class Grid : Element
         cellMeta.defaultValue = Value(0);
         cellMeta.affectsParentMeasure = true;
 
-        rowProperty = Property.registerAttached("Row",
+        rowProperty = Property.registerAttached("row",
             getRtti!int(), getRtti!Grid(), cellMeta, &isUsableIndex);
-        columnProperty = Property.registerAttached("Column",
+        columnProperty = Property.registerAttached("column",
             getRtti!int(), getRtti!Grid(), cellMeta, &isUsableIndex);
 
         PropertyMetadata spanMeta;
         spanMeta.defaultValue = Value(1);
         spanMeta.affectsParentMeasure = true;
 
-        rowSpanProperty = Property.registerAttached("RowSpan",
+        rowSpanProperty = Property.registerAttached("rowSpan",
             getRtti!int(), getRtti!Grid(), spanMeta, &isUsableSpan);
-        columnSpanProperty = Property.registerAttached("ColumnSpan",
+        columnSpanProperty = Property.registerAttached("columnSpan",
             getRtti!int(), getRtti!Grid(), spanMeta, &isUsableSpan);
 
         // **The four lines that make the flags above work at all.**
@@ -396,9 +396,9 @@ class Grid : Element
         gapMeta.defaultValue = Value(0.0f);
         gapMeta.affectsMeasure = true;
 
-        rowSpacingProperty = Property.register("RowSpacing",
+        rowSpacingProperty = Property.register("rowSpacing",
             getRtti!float(), getRtti!Grid(), gapMeta, &isFiniteSpacing);
-        columnSpacingProperty = Property.register("ColumnSpacing",
+        columnSpacingProperty = Property.register("columnSpacing",
             getRtti!float(), getRtti!Grid(), gapMeta, &isFiniteSpacing);
     }
 

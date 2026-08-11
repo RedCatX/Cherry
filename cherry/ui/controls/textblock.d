@@ -66,48 +66,48 @@ class TextBlock : Element
         textMeta.defaultValue = Value("");
         textMeta.affectsMeasure = true;
 
-        textProperty = Property.register("Text", getRtti!string(), getRtti!TextBlock(), textMeta);
+        textProperty = Property.register("text", getRtti!string(), getRtti!TextBlock(), textMeta);
 
         PropertyMetadata familyMeta;
         familyMeta.defaultValue = Value(system.family);
         familyMeta.affectsMeasure = true;
 
-        fontFamilyProperty = Property.register("FontFamily",
+        fontFamilyProperty = Property.register("fontFamily",
             getRtti!string(), getRtti!TextBlock(), familyMeta);
 
         PropertyMetadata sizeMeta;
         sizeMeta.defaultValue = Value(system.size);
         sizeMeta.affectsMeasure = true;
 
-        fontSizeProperty = Property.register("FontSize",
+        fontSizeProperty = Property.register("fontSize",
             getRtti!float(), getRtti!TextBlock(), sizeMeta, &isUsableFontSize);
 
         PropertyMetadata weightMeta;
         weightMeta.defaultValue = Value(system.weight);
         weightMeta.affectsMeasure = true;
 
-        fontWeightProperty = Property.register("FontWeight",
+        fontWeightProperty = Property.register("fontWeight",
             getRtti!FontWeight(), getRtti!TextBlock(), weightMeta);
 
         PropertyMetadata styleMeta;
         styleMeta.defaultValue = Value(system.style);
         styleMeta.affectsMeasure = true;
 
-        fontStyleProperty = Property.register("FontStyle",
+        fontStyleProperty = Property.register("fontStyle",
             getRtti!FontStyle(), getRtti!TextBlock(), styleMeta);
 
         PropertyMetadata wrappingMeta;
         wrappingMeta.defaultValue = Value(TextWrapping.noWrap);
         wrappingMeta.affectsMeasure = true;
 
-        textWrappingProperty = Property.register("TextWrapping",
+        textWrappingProperty = Property.register("textWrapping",
             getRtti!TextWrapping(), getRtti!TextBlock(), wrappingMeta);
 
         PropertyMetadata renderingMeta;
         renderingMeta.defaultValue = Value(TextRendering.display);
         renderingMeta.affectsMeasure = true;
 
-        textRenderingProperty = Property.register("TextRendering",
+        textRenderingProperty = Property.register("textRendering",
             getRtti!TextRendering(), getRtti!TextBlock(), renderingMeta);
 
         // The ink is the one thing here that changes nothing about how much
@@ -125,7 +125,7 @@ class TextBlock : Element
         foregroundMeta.defaultValue = Value.init;
         foregroundMeta.affectsRender = true;
 
-        foregroundProperty = Property.register("Foreground",
+        foregroundProperty = Property.register("foreground",
             getRtti!Brush(), getRtti!TextBlock(), foregroundMeta);
     }
 

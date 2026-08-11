@@ -573,6 +573,19 @@ final immutable class Property
         PropertyRegistry.get().overrideMetadata(this, forType, typeMetadata);
     }
 
+   /**
+    * What the property is called: exactly what its accessor is called.
+    *
+    * `width`, not `Width`.  The two used to differ by their first letter, which
+    * meant every property had two names and a reader had to know which one was
+    * being talked about.  JUICE settles which of them wins: it writes the name
+    * straight into an assignment in the D it generates, so the name in markup
+    * is the name of the accessor, and a registry that spelled it otherwise
+    * would be describing a property nobody can write.
+    *
+    * Nothing looks a property up by this -- it is for diagnostics, and for
+    * anything above that wants to say which property it means.
+    */
     @property string name() pure const nothrow
     {
         return _name;
@@ -927,21 +940,21 @@ unittest
     // time, on every registration path.
     PropertyMetadata bad;
     bad.defaultValue = Value("oops");
-    assertThrown(Property.register("BadDefault", getRtti!int(), getRtti!AttachOwner(), bad));
-    assertThrown(Property.registerAttached("BadDefault", getRtti!int(), getRtti!AttachOwner(), bad));
+    assertThrown(Property.register("badDefault", getRtti!int(), getRtti!AttachOwner(), bad));
+    assertThrown(Property.registerAttached("badDefault", getRtti!int(), getRtti!AttachOwner(), bad));
 
     // A failed registration does not reserve the property name.
     PropertyMetadata good;
     good.defaultValue = Value(5);
-    auto recovered = Property.register("BadDefault", getRtti!int(), getRtti!AttachOwner(), good);
+    auto recovered = Property.register("badDefault", getRtti!int(), getRtti!AttachOwner(), good);
     assert(recovered.defaultMetadata.defaultValue.get!int == 5);
 
     // An attached property's metadata can be overridden for a host type
     // unrelated to the owner; a regular property still cannot.
     PropertyMetadata baseMeta;
     baseMeta.defaultValue = Value(1);
-    auto attached = Property.registerAttached("ForeignOverride", getRtti!int(), getRtti!AttachOwner(), baseMeta);
-    auto regular  = Property.register("ForeignOverride2", getRtti!int(), getRtti!AttachOwner(), baseMeta);
+    auto attached = Property.registerAttached("foreignOverride", getRtti!int(), getRtti!AttachOwner(), baseMeta);
+    auto regular  = Property.register("foreignOverride2", getRtti!int(), getRtti!AttachOwner(), baseMeta);
 
     PropertyMetadata hostMeta;
     hostMeta.defaultValue = Value(42);
@@ -965,7 +978,7 @@ unittest
     PropertyMetadata meta;
     meta.defaultValue = Value(1);
 
-    auto key = Property.registerReadOnly("Locked", getRtti!int(), getRtti!Secured(), meta);
+    auto key = Property.registerReadOnly("locked", getRtti!int(), getRtti!Secured(), meta);
     auto lockedProperty = key.property;
     assert(lockedProperty.isReadOnly);
     assert(!lockedProperty.isAttached);
@@ -974,7 +987,7 @@ unittest
     // are fields of the property.  Which is also why asking is pure and
     // nothrow -- setValue asks on every single write, and it used to have to
     // read shared mutable state to find out.
-    auto plain = Property.register("Open", getRtti!int(), getRtti!Secured());
+    auto plain = Property.register("open", getRtti!int(), getRtti!Secured());
     assert(!plain.isReadOnly);
     assert(!plain.isAttached);
 
@@ -992,7 +1005,7 @@ unittest
     assert(obj.getValue(lockedProperty).get!int == 5);
 
     // Attached read-only: the owner's key sets the value on foreign hosts.
-    auto attachedKey = Property.registerAttachedReadOnly("LockedAttached", getRtti!int(), getRtti!Secured(), meta);
+    auto attachedKey = Property.registerAttachedReadOnly("lockedAttached", getRtti!int(), getRtti!Secured(), meta);
     assert(attachedKey.property.isReadOnly);
     assert(attachedKey.property.isAttached);
 
