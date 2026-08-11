@@ -794,6 +794,25 @@ class Element : Visual
         // reached again from inside measureOverride sees the one in flight.
         _previousConstraint = availableSize;
 
+        // A collapsed element asks for nothing and asks its children nothing --
+        // measureOverride is what would reach them, and it is not called.
+        //
+        // Everything below is skipped with it, the bounds included: a MinWidth
+        // is a floor under a size that exists, and this element has no size to
+        // put a floor under.  The margin goes the same way, since what a parent
+        // pays for something that is not there is nothing.
+        //
+        // Coming back is not a special case: visible carries affectsMeasure, so
+        // turning it on marks this dirty, and a dirty element is measured again
+        // even against the constraint it was last given.
+        if (!visible)
+        {
+            _unclippedDesiredSize = Size(0, 0);
+            _desiredSize = Size(0, 0);
+            _measureDirty = false;
+            return;
+        }
+
         immutable m = margin;
 
         // A margin wider than the room on offer would leave a negative amount,
@@ -905,15 +924,26 @@ class Element : Visual
         arrangeSize.height = atMost(arrangeSize.height,
                                     atLeast(limits.maxHeight, _unclippedDesiredSize.height));
 
-        immutable arranged = arrangeOverride(arrangeSize);
+        // A collapsed element is given no size and its children are not placed:
+        // arrangeOverride is what would place them, and it is not called.
+        //
+        // What is *not* skipped is everything below.  The rectangle this element
+        // is leaving still has to be repainted, and that is the whole of what
+        // makes something vanish from the screen rather than merely stop being
+        // drawn into it.
+        immutable arranged = visible ? arrangeOverride(arrangeSize) : Size(0, 0);
 
         immutable vacated = _arrangedRect;
 
-        _arrangedRect = Rect(
-            finalRect.x + m.left + horizontalOffset(horizontalAlignment, client.width,  arranged.width),
-            finalRect.y + m.top  + verticalOffset(verticalAlignment,     client.height, arranged.height),
-            arranged.width,
-            arranged.height);
+        // Placed at the slot's own corner rather than wherever the alignment
+        // would centre an empty rectangle.  Both are empty and neither can be
+        // seen or hit; this one is the one that reads as "nothing here".
+        _arrangedRect = visible
+            ? Rect(finalRect.x + m.left + horizontalOffset(horizontalAlignment, client.width,  arranged.width),
+                   finalRect.y + m.top  + verticalOffset(verticalAlignment,     client.height, arranged.height),
+                   arranged.width,
+                   arranged.height)
+            : Rect(finalRect.x, finalRect.y, 0, 0);
 
         setValue(actualWidthKey,  Value(arranged.width));
         setValue(actualHeightKey, Value(arranged.height));
@@ -2362,6 +2392,84 @@ unittest
     c.invalidateArrange();
     c.arrange(Rect(0, 0, 200, 130));
     assert(c.arranges == 3, "nowhere new to go, but something changed underneath");
+}
+
+unittest
+{
+    // A collapsed element costs nothing and is asked nothing.  The sizes it was
+    // given are still there, waiting -- they are simply not what it answers.
+    auto c = new Counter;
+    c.width = 120;
+    c.height = 60;
+    c.minWidth = 80;
+    c.margin = Thickness(10);
+    c.visible = false;
+
+    c.measure(Size(500, 400));
+
+    assert(c.desiredSize == Size(0, 0), "nothing, margin and minimum included");
+    assert(c.unclippedDesiredSize == Size(0, 0));
+    assert(c.measures == 0, "measureOverride is what reaches the children, and it did not run");
+
+    c.arrange(Rect(30, 40, 200, 100));
+
+    assert(c.arranges == 0);
+    assert(c.arrangedRect == Rect(30, 40, 0, 0), "placed at the slot's corner, covering nothing");
+    assert(c.arrangedRect.empty);
+    assert(c.actualWidth == 0 && c.actualHeight == 0);
+}
+
+unittest
+{
+    // And coming back is not a special case: the size it had is the size it has
+    // again, because visible marks the measure stale on its way through.
+    auto c = new Counter;
+    c.width = 120;
+    c.height = 60;
+
+    // Pinned to a corner, because an element with both sizes fixed cannot
+    // stretch and the default alignment would centre it in the slot -- which
+    // is correct, and would make the placement below say nothing about
+    // visibility.
+    c.horizontalAlignment = HorizontalAlignment.left;
+    c.verticalAlignment = VerticalAlignment.top;
+
+    c.measure(Size(500, 400));
+    c.arrange(Rect(0, 0, 500, 400));
+    assert(c.desiredSize == Size(120, 60));
+
+    c.visible = false;
+    assert(!c.isMeasureValid, "which is what makes the pass below happen at all");
+
+    c.measure(Size(500, 400));
+    c.arrange(Rect(0, 0, 500, 400));
+    assert(c.desiredSize == Size(0, 0));
+
+    c.visible = true;
+    assert(!c.isMeasureValid);
+
+    c.measure(Size(500, 400));
+    c.arrange(Rect(0, 0, 500, 400));
+    assert(c.desiredSize == Size(120, 60), "the same question, and the old answer back");
+    assert(c.arrangedRect == Rect(0, 0, 120, 60));
+}
+
+unittest
+{
+    // Collapsing a child is the parent's business: what it measured itself
+    // against has gone, so its own answer is stale.
+    auto parent = new Counter;
+    auto child = new Counter;
+    child.width = 50;
+    child.height = 20;
+    parent.addChild(child);
+
+    parent.measure(Size(200, 100));
+    parent.arrange(Rect(0, 0, 200, 100));
+    assert(parent.isMeasureValid);
+
+    child.visible = false;
+    assert(!parent.isMeasureValid, "the walk up from the child reaches it");
 }
 
 unittest
