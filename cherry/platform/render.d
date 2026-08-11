@@ -177,6 +177,33 @@ struct Rect
 
         return Rect(left, top, right_ - left, bottom_ - top);
     }
+
+   /**
+    * The rectangle both of them cover, or `Rect.init` when together they cover
+    * nothing.
+    *
+    * Nothing comes back as `Rect.init` rather than as a rectangle with a
+    * negative extent, so that `empty` says yes to the answer and a caller can
+    * pass it on without a second test of its own.
+    *
+    * An empty operand therefore intersects to nothing, from either side --
+    * which is the opposite of what `unite` does with one, and is the same fact
+    * about nothing seen from both ends: it is what a union ignores and what an
+    * intersection collapses to.  A NaN edge lands in the same place, because
+    * the two comparisons that decide it are false either way.
+    */
+    Rect intersect(Rect other) pure const nothrow @nogc
+    {
+        immutable left   = x > other.x ? x : other.x;
+        immutable top    = y > other.y ? y : other.y;
+        immutable right_ = this.right  < other.right  ? this.right  : other.right;
+        immutable bottom_= this.bottom < other.bottom ? this.bottom : other.bottom;
+
+        if (!(right_ > left) || !(bottom_ > top))
+            return Rect.init;
+
+        return Rect(left, top, right_ - left, bottom_ - top);
+    }
 }
 
 unittest
@@ -230,6 +257,34 @@ unittest
     // Nested: the larger one already covers the smaller.
     immutable outer = Rect(0, 0, 100, 100);
     assert(outer.unite(Rect(10, 10, 5, 5)) == outer);
+}
+
+unittest
+{
+    // The intersection is the overlap, and no overlap is Rect.init rather than
+    // a rectangle turned inside out.
+    immutable a = Rect(0, 0, 100, 100);
+    immutable b = Rect(50, 60, 100, 100);
+
+    assert(a.intersect(b) == Rect(50, 60, 50, 40));
+    assert(b.intersect(a) == a.intersect(b), "and it does not matter which way round");
+    assert(a.intersect(a) == a);
+
+    // Nested: the smaller one is the whole of the overlap.
+    immutable inner = Rect(10, 10, 5, 5);
+    assert(a.intersect(inner) == inner);
+
+    // Apart, and touching along an edge, are both nothing -- the far edge
+    // belongs to the neighbour, exactly as contains has it.
+    assert(a.intersect(Rect(200, 200, 10, 10)) == Rect.init);
+    assert(a.intersect(Rect(100, 0, 10, 100)) == Rect.init, "edge to edge covers no area");
+
+    // An empty operand collapses it, unlike a union, which ignores one.
+    assert(a.intersect(Rect.init) == Rect.init);
+    assert(Rect.init.intersect(a) == Rect.init);
+    assert(a.intersect(Rect(10, 10, 0, 50)) == Rect.init);
+
+    assert(a.intersect(Rect(10, 10, float.nan, 50)) == Rect.init);
 }
 
 /**
