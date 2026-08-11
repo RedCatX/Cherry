@@ -50,9 +50,9 @@ final class D2DWindowRenderer : WindowRenderer
                "every pushTransform must be matched by a popTransform before "
                ~ "the frame ends.");
 
-        assert(_context.clipDepth == 0,
-               "every pushClip must be matched by a popClip before the frame "
-               ~ "ends.");
+        assert(_context.pushDepth == 0,
+               "every pushClip and pushOpacity must be matched before the "
+               ~ "frame ends.");
 
         auto hr = _target.EndDraw(null, null);
 
@@ -366,15 +366,55 @@ private final class D2DDrawingContext : DrawingContext
     {
         auto area = toRectF(region);
         _target.PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_ALIASED);
-        ++_clipDepth;
+        remember(Pushed.clip);
     }
 
     void popClip()
     {
-        assert(_clipDepth > 0, "popClip with no clip pushed");
+        assert(pushedOnTop == Pushed.clip,
+               "popClip must undo a pushClip: Direct2D takes clips and layers "
+               ~ "off in the reverse of the order they went on.");
 
         _target.PopAxisAlignedClip();
-        --_clipDepth;
+        forget();
+    }
+
+   /*
+    * A layer with nothing but an opacity on it, and no ID2D1Layer of our own.
+    *
+    * Passing null lets Direct2D take one from its own pool and give it back at
+    * PopLayer, which is what the documentation recommends from Windows 8 on.
+    * Owning one would mean sizing it, keeping it across frames and recreating
+    * it after device loss -- three things to get wrong in exchange for nothing.
+    *
+    * Infinite content bounds, because what is drawn inside is whatever element
+    * code draws and this layer does not know it in advance.  A caller who did
+    * know could hand Direct2D a smaller box and save it some pixels; that is a
+    * thing to add when there is a caller who knows, not before.
+    */
+    void pushOpacity(float opacity)
+    {
+        auto params = D2D1_LAYER_PARAMETERS(
+            D2D1_RECT_F(-float.max, -float.max, float.max, float.max),
+            null,
+            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            D2D1_MATRIX_3X2_F(1, 0, 0, 1, 0, 0),
+            opacity,
+            null,
+            D2D1_LAYER_OPTIONS_NONE);
+
+        _target.PushLayer(&params, null);
+        remember(Pushed.layer);
+    }
+
+    void popOpacity()
+    {
+        assert(pushedOnTop == Pushed.layer,
+               "popOpacity must undo a pushOpacity: Direct2D takes clips and "
+               ~ "layers off in the reverse of the order they went on.");
+
+        _target.PopLayer();
+        forget();
     }
 
    /*
@@ -395,16 +435,25 @@ private final class D2DDrawingContext : DrawingContext
         _transforms.reset();
         applyTransform();
 
-        // Really popped, not merely forgotten.  A clip lives on the target and
-        // not in this object, so a frame that threw while holding one would
-        // otherwise leave the next frame drawing inside a dead element's
-        // rectangle -- the same failure the transform reset above prevents, and
-        // a quieter one, because everything outside it would simply not appear.
-        while (_clipDepth)
+        // Really popped, not merely forgotten.  A clip and a layer both live on
+        // the target and not in this object, so a frame that threw while
+        // holding one would otherwise leave the next frame drawing inside a
+        // dead element's rectangle -- the same failure the transform reset above
+        // prevents, and a quieter one, because everything outside it would
+        // simply not appear.
+        //
+        // Backwards, because that is the order Direct2D takes them off in, and
+        // the only reason the two kinds are on one stack.
+        foreach_reverse (kind; _pushed[0 .. _depth])
         {
-            _target.PopAxisAlignedClip();
-            --_clipDepth;
+            final switch (kind)
+            {
+                case Pushed.clip:  _target.PopAxisAlignedClip(); break;
+                case Pushed.layer: _target.PopLayer();           break;
+            }
         }
+
+        _depth = 0;
 
         // The parameters themselves stay on the target across frames; what is
         // forgotten here is only which ones this context believes are in
@@ -419,13 +468,35 @@ private final class D2DDrawingContext : DrawingContext
         return _transforms.depth;
     }
 
-    /// ditto
-    @property size_t clipDepth()
+    /// ditto, for the clips and layers left on the target.
+    @property size_t pushDepth()
     {
-        return _clipDepth;
+        return _depth;
     }
 
 private:
+    /// The kind on top of the stack.  Asking an empty one is a caller's bug.
+    @property Pushed pushedOnTop()
+    {
+        assert(_depth > 0, "nothing was pushed, so there is nothing to pop.");
+        return _pushed[_depth - 1];
+    }
+
+    void remember(Pushed kind)
+    {
+        if (_depth < _pushed.length)
+            _pushed[_depth] = kind;
+        else
+            _pushed ~= kind;
+
+        ++_depth;
+    }
+
+    void forget()
+    {
+        --_depth;
+    }
+
     void applyTransform()
     {
         auto value = toMatrix3x2(_transforms.current);
@@ -763,10 +834,23 @@ private:
     ID2D1StrokeStyle[StrokeShape] _strokeStyles;
     TransformStack            _transforms;
 
-    // Not a stack, because there is nothing to remember: a clip is popped by
-    // asking the target to pop one, and the target keeps them itself.  What
-    // this counts is how many of them are ours to pop.
-    size_t _clipDepth;
+   /*
+    * What is outstanding on the target, in the order it went on.
+    *
+    * One stack for both kinds rather than a counter each, because Direct2D
+    * takes clips and layers off in the reverse of the order they were pushed
+    * and does not care which kind a caller thinks it is popping.  A mismatched
+    * pair -- a popClip undoing a pushOpacity -- would otherwise unwind the
+    * wrong thing and leave the target quietly wrong for the rest of the frame.
+    *
+    * The array is grown but never shrunk, and _depth is the live part of it.
+    * A frame pushes and pops the same handful of times, and giving the length
+    * back would mean reallocating on the next push.
+    */
+    enum Pushed : ubyte { clip, layer }
+
+    Pushed[] _pushed;
+    size_t   _depth;
 
     // Which mode's parameters the target is carrying, or -1 for "not yet
     // said".  An int rather than the enum, because "none of them" is a state

@@ -172,6 +172,37 @@ struct D2D1_STROKE_STYLE_PROPERTIES
     float dashOffset = 0;
 }
 
+enum D2D1_LAYER_OPTIONS_NONE = 0;
+
+/*
+ * The layout here is ABI, exactly as a vtable's order is: PushLayer is handed
+ * a pointer to one of these and reads the fields by their offsets.  The two
+ * pointers are what make it worth checking rather than eyeballing -- each of
+ * them pulls the alignment to eight and leaves a hole behind it that has to
+ * fall in the same place the C compiler put it.  The asserts below are the
+ * check, and they are why a mistake here is a build error instead of a window
+ * full of noise.
+ */
+struct D2D1_LAYER_PARAMETERS
+{
+    D2D1_RECT_F       contentBounds;
+    void*             geometricMask;      // ID2D1Geometry*
+    int               maskAntialiasMode;  // D2D1_ANTIALIAS_MODE
+    D2D1_MATRIX_3X2_F maskTransform;
+    float             opacity = 1;
+    void*             opacityBrush;       // ID2D1Brush*
+    int               layerOptions;       // D2D1_LAYER_OPTIONS
+}
+
+static assert(D2D1_LAYER_PARAMETERS.sizeof == 72);
+static assert(D2D1_LAYER_PARAMETERS.contentBounds.offsetof == 0);
+static assert(D2D1_LAYER_PARAMETERS.geometricMask.offsetof == 16);
+static assert(D2D1_LAYER_PARAMETERS.maskAntialiasMode.offsetof == 24);
+static assert(D2D1_LAYER_PARAMETERS.maskTransform.offsetof == 28);
+static assert(D2D1_LAYER_PARAMETERS.opacity.offsetof == 52);
+static assert(D2D1_LAYER_PARAMETERS.opacityBrush.offsetof == 56);
+static assert(D2D1_LAYER_PARAMETERS.layerOptions.offsetof == 64);
+
 // ----------------------------------------------------------------- GUIDs --
 
 immutable IID IID_ID2D1Factory =

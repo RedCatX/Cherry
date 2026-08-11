@@ -1167,6 +1167,36 @@ interface DrawingContext
     * allowed before it.  Popping with nothing pushed is a programming error.
     */
     void popClip();
+
+   /**
+    * Draws everything up to the matching popOpacity into a layer of its own and
+    * composites that layer at the given opacity: 1 changes nothing, 0 shows
+    * nothing.
+    *
+    * **The group is made transparent, not each thing in it.** Two overlapping
+    * shapes drawn inside one of these show the background through both of them
+    * and not each other through the overlap, which is the difference between a
+    * half-transparent group and a group of half-transparent things -- and the
+    * reason this is a push rather than an argument on every call.
+    *
+    * Nested pushes multiply, because each one composites what the one inside it
+    * had already produced.
+    *
+    * A layer is the expensive thing in this interface: what it costs is an
+    * off-screen surface and a second pass over the pixels.  A caller with
+    * nothing to make transparent should not push one, and `opacity == 1` is
+    * worth checking for before calling rather than after.
+    */
+    void pushOpacity(float opacity);
+
+   /**
+    * Composites the layer the matching pushOpacity opened and returns to
+    * drawing straight onto what is underneath.
+    *
+    * Clips and layers come off in the reverse of the order they went on.  A
+    * backend is entitled to insist on that and to say so loudly.
+    */
+    void popOpacity();
 }
 
 /**
@@ -1389,8 +1419,32 @@ version (unittest)
         /// How many clips are outstanding -- the other half of a balance check.
         @property size_t clipDepth() { return _clipDepth; }
 
+       /**
+        * Every opacity pushed, in the order pushed.
+        *
+        * As handed over, not multiplied down the nesting: what a caller asked
+        * for is what a test about that caller should be reading.
+        */
+        float[] opacities;
+
+        void pushOpacity(float opacity)
+        {
+            opacities ~= opacity;
+            ++_opacityDepth;
+        }
+
+        void popOpacity()
+        {
+            assert(_opacityDepth > 0, "popOpacity with no layer pushed");
+            --_opacityDepth;
+        }
+
+        /// How many layers are outstanding.
+        @property size_t opacityDepth() { return _opacityDepth; }
+
     private:
         size_t _clipDepth;
+        size_t _opacityDepth;
 
         void record(Kind kind, Rect rect, Paint paint, Stroke stroke,
                     float radiusX = 0, float radiusY = 0)
@@ -1676,4 +1730,25 @@ unittest
 
     assert(context.clipDepth == 0, "balanced, which is what a walk has to leave behind");
     assert(context.clips.length == 2, "and popping does not unrecord anything");
+}
+
+unittest
+{
+    // Opacities are recorded as they were asked for, and the nesting is counted
+    // rather than multiplied: what a caller pushed is what a test reads.
+    auto context = new RecordingContext;
+
+    assert(context.opacityDepth == 0);
+
+    context.pushOpacity(0.5f);
+    context.pushOpacity(0.5f);
+
+    assert(context.opacityDepth == 2);
+    assert(context.opacities == [0.5f, 0.5f]);
+
+    context.popOpacity();
+    context.popOpacity();
+
+    assert(context.opacityDepth == 0);
+    assert(context.opacities.length == 2);
 }
