@@ -759,6 +759,9 @@
  <Folder name="cherry">
   <Folder name="cherry">
    <Folder name="core">
+    <Folder name="containers">
+     <File path="cherry\core\containers\collection.d" />
+    </Folder>
     <Folder name="threading">
      <File path="cherry\core\threading\dispatcher.d" />
      <File path="cherry\core\threading\frame.d" />
@@ -801,6 +804,7 @@
     <Folder name="controls">
      <File path="cherry\ui\controls\button.d" />
      <File path="cherry\ui\controls\control.d" />
+     <File path="cherry\ui\controls\grid.d" />
      <File path="cherry\ui\controls\package.d" />
      <File path="cherry\ui\controls\stackpanel.d" />
      <File path="cherry\ui\controls\textblock.d" />
@@ -808,6 +812,7 @@
     <Folder name="media">
      <File path="cherry\ui\media\brush.d" />
      <File path="cherry\ui\media\package.d" />
+     <File path="cherry\ui\media\pen.d" />
     </Folder>
     <File path="cherry\ui\application.d" />
     <File path="cherry\ui\element.d" />
