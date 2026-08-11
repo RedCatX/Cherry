@@ -82,6 +82,16 @@ final immutable class RoutedEvent
         return new immutable(RoutedEvent)(name, strategy, ownerType);
     }
 
+   /**
+    * What the event is called: exactly what its accessor is called.
+    *
+    * `onClick`, not `Click` -- the same rule Property.name follows, and for the
+    * same reason: one thing gets one name.  The `on` is part of it rather than
+    * a prefix somebody adds, because subscribing is the only way an event is
+    * ever written down, and `element.onClick ~= handler` is that writing.
+    *
+    * Nothing looks an event up by this; it is for diagnostics.
+    */
     @property string name() pure const nothrow
     {
         return _name;
@@ -403,19 +413,19 @@ unittest
     }
 
     // Registration and identity.
-    auto clickEvent = RoutedEvent.register("Click", RoutingStrategy.bubble, getRtti!Panel());
-    assert(clickEvent.name == "Click");
+    auto clickEvent = RoutedEvent.register("onClick", RoutingStrategy.bubble, getRtti!Panel());
+    assert(clickEvent.name == "onClick");
     assert(clickEvent.routingStrategy == RoutingStrategy.bubble);
     assert(clickEvent.ownerType is getRtti!Panel());
 
     // A duplicate name for the same owner is rejected; the same name for a
     // different owner is fine.
-    assertThrown(RoutedEvent.register("Click", RoutingStrategy.bubble, getRtti!Panel()));
-    auto otherClick = RoutedEvent.register("Click", RoutingStrategy.bubble, getRtti!Other());
+    assertThrown(RoutedEvent.register("onClick", RoutingStrategy.bubble, getRtti!Panel()));
+    auto otherClick = RoutedEvent.register("onClick", RoutingStrategy.bubble, getRtti!Other());
     assert(otherClick.id != clickEvent.id);
 
-    auto previewEvent = RoutedEvent.register("PreviewClick", RoutingStrategy.tunnel, getRtti!Panel());
-    auto pokeEvent    = RoutedEvent.register("Poke", RoutingStrategy.direct, getRtti!Panel());
+    auto previewEvent = RoutedEvent.register("onPreviewClick", RoutingStrategy.tunnel, getRtti!Panel());
+    auto pokeEvent    = RoutedEvent.register("onPoke", RoutingStrategy.direct, getRtti!Panel());
 
     // Tree: root -> mid -> leaf.
     auto root = new Element;
@@ -482,7 +492,7 @@ unittest
 
     // handled skips the remaining handlers, except those subscribed with
     // handledEventsToo.
-    auto stopEvent = RoutedEvent.register("Stop", RoutingStrategy.bubble, getRtti!Panel());
+    auto stopEvent = RoutedEvent.register("onStop", RoutingStrategy.bubble, getRtti!Panel());
     log = null;
     leaf.addEventHandler(stopEvent, (Element sender, RoutedEventArgs a) {
         log ~= "leaf";
@@ -501,7 +511,7 @@ unittest
 
     // removeHandler removes one registration at a time and ignores
     // handlers that are not registered.
-    auto rmEvent = RoutedEvent.register("Rm", RoutingStrategy.direct, getRtti!Panel());
+    auto rmEvent = RoutedEvent.register("onRm", RoutingStrategy.direct, getRtti!Panel());
     RoutedEventHandler h = (Element sender, RoutedEventArgs a) { log ~= "h"; };
     leaf.addEventHandler(rmEvent, h);
     leaf.addEventHandler(rmEvent, h);
@@ -543,7 +553,7 @@ unittest
         private immutable(RoutedEvent) _clickEvent;
     }
 
-    auto clickEvent = RoutedEvent.register("AccessorClick", RoutingStrategy.bubble, getRtti!Button());
+    auto clickEvent = RoutedEvent.register("onAccessorClick", RoutingStrategy.bubble, getRtti!Button());
 
     auto panel  = new Element;
     auto button = new Button(clickEvent);
@@ -606,7 +616,7 @@ unittest
     // The class tier runs before the instance queue on the same element.
     static class Widget : Element { }
 
-    auto tierEvent = RoutedEvent.register("Tier", RoutingStrategy.direct, getRtti!Widget());
+    auto tierEvent = RoutedEvent.register("onTier", RoutingStrategy.direct, getRtti!Widget());
     tierEvent.registerClassHandler(getRtti!Widget(), logging!"class");
 
     auto widget = new Widget;
@@ -625,7 +635,7 @@ unittest
     static class Base : Element { }
     static class Derived : Base { }
 
-    auto chainEvent = RoutedEvent.register("Chain", RoutingStrategy.direct, getRtti!Base());
+    auto chainEvent = RoutedEvent.register("onChain", RoutingStrategy.direct, getRtti!Base());
     chainEvent.registerClassHandler(getRtti!Base(), logging!"base");
     chainEvent.registerClassHandler(getRtti!Derived(), logging!"derived");
 
@@ -647,7 +657,7 @@ unittest
     static class Base : Element { }
     static class Derived : Base { }
 
-    auto claimEvent = RoutedEvent.register("Claim", RoutingStrategy.direct, getRtti!Base());
+    auto claimEvent = RoutedEvent.register("onClaim", RoutingStrategy.direct, getRtti!Base());
     claimEvent.registerClassHandler(getRtti!Base(), logging!"base");
     claimEvent.registerClassHandler(getRtti!Derived(), claiming!"derived");
     claimEvent.registerClassHandler(getRtti!Derived(), logging!"derived-too", true);
@@ -669,7 +679,7 @@ unittest
     static class Owner : Element { }
     static class Panel : Element { }
 
-    auto foreignEvent = RoutedEvent.register("Foreign", RoutingStrategy.bubble, getRtti!Owner());
+    auto foreignEvent = RoutedEvent.register("onForeign", RoutingStrategy.bubble, getRtti!Owner());
     foreignEvent.registerClassHandler(getRtti!Panel(), logging!"panel");
 
     auto panel = new Panel;
@@ -689,7 +699,7 @@ unittest
     static class Known : Element { }
     static class Unknown : Known { }
 
-    auto inheritedEvent = RoutedEvent.register("Inherited", RoutingStrategy.direct, getRtti!Known());
+    auto inheritedEvent = RoutedEvent.register("onInherited", RoutingStrategy.direct, getRtti!Known());
     inheritedEvent.registerClassHandler(getRtti!Known(), logging!"known");
 
     classLog = null;
@@ -709,9 +719,9 @@ unittest
         this(string name) { this.name = name; }
     }
 
-    auto upEvent = RoutedEvent.register("TierUp", RoutingStrategy.bubble, getRtti!Node());
-    auto downEvent = RoutedEvent.register("TierDown", RoutingStrategy.tunnel, getRtti!Node());
-    auto hereEvent = RoutedEvent.register("TierHere", RoutingStrategy.direct, getRtti!Node());
+    auto upEvent = RoutedEvent.register("onTierUp", RoutingStrategy.bubble, getRtti!Node());
+    auto downEvent = RoutedEvent.register("onTierDown", RoutingStrategy.tunnel, getRtti!Node());
+    auto hereEvent = RoutedEvent.register("onTierHere", RoutingStrategy.direct, getRtti!Node());
 
     auto naming = function(Element sender, RoutedEventArgs args) {
         classLog ~= (cast(Node) sender).name;
@@ -747,7 +757,7 @@ unittest
     // anything is added to it.
     static class Late : Element { }
 
-    auto lateEvent = RoutedEvent.register("Late", RoutingStrategy.direct, getRtti!Late());
+    auto lateEvent = RoutedEvent.register("onLate", RoutingStrategy.direct, getRtti!Late());
     auto late = new Late;
 
     classLog = null;
@@ -770,7 +780,7 @@ unittest
     static class Widget : Element { }
     static class Stranger { }
 
-    auto strangerEvent = RoutedEvent.register("Stranger", RoutingStrategy.direct, getRtti!Widget());
+    auto strangerEvent = RoutedEvent.register("onStranger", RoutingStrategy.direct, getRtti!Widget());
 
     assertThrown(strangerEvent.registerClassHandler(getRtti!Stranger(), logging!"never"));
 }

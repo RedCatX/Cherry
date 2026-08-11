@@ -169,7 +169,7 @@ class Element : Visual
         verticalAlignmentProperty = Property.register("verticalAlignment",
             getRtti!VerticalAlignment(), getRtti!Element(), verticalMeta);
 
-        sizeChangedEvent = RoutedEvent.register("SizeChanged", RoutingStrategy.direct, getRtti!Element());
+        sizeChangedEvent = RoutedEvent.register("onSizeChanged", RoutingStrategy.direct, getRtti!Element());
     }
 
     static immutable(Property) widthProperty;

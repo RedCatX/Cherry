@@ -221,19 +221,19 @@ immutable RoutedEvent lostFocusEvent;
 
 shared static this()
 {
-    mouseDownEvent  = RoutedEvent.register("MouseDown", RoutingStrategy.bubble, getRtti!Element());
-    mouseUpEvent    = RoutedEvent.register("MouseUp", RoutingStrategy.bubble, getRtti!Element());
-    mouseMoveEvent  = RoutedEvent.register("MouseMove", RoutingStrategy.bubble, getRtti!Element());
-    mouseEnterEvent = RoutedEvent.register("MouseEnter", RoutingStrategy.direct, getRtti!Element());
-    mouseLeaveEvent = RoutedEvent.register("MouseLeave", RoutingStrategy.direct, getRtti!Element());
-    mouseCaptureLostEvent = RoutedEvent.register("MouseCaptureLost",
+    mouseDownEvent  = RoutedEvent.register("onMouseDown", RoutingStrategy.bubble, getRtti!Element());
+    mouseUpEvent    = RoutedEvent.register("onMouseUp", RoutingStrategy.bubble, getRtti!Element());
+    mouseMoveEvent  = RoutedEvent.register("onMouseMove", RoutingStrategy.bubble, getRtti!Element());
+    mouseEnterEvent = RoutedEvent.register("onMouseEnter", RoutingStrategy.direct, getRtti!Element());
+    mouseLeaveEvent = RoutedEvent.register("onMouseLeave", RoutingStrategy.direct, getRtti!Element());
+    mouseCaptureLostEvent = RoutedEvent.register("onMouseCaptureLost",
         RoutingStrategy.direct, getRtti!Element());
 
-    keyDownEvent    = RoutedEvent.register("KeyDown", RoutingStrategy.bubble, getRtti!Element());
-    keyUpEvent      = RoutedEvent.register("KeyUp", RoutingStrategy.bubble, getRtti!Element());
-    textInputEvent  = RoutedEvent.register("TextInput", RoutingStrategy.bubble, getRtti!Element());
-    gotFocusEvent   = RoutedEvent.register("GotFocus", RoutingStrategy.bubble, getRtti!Element());
-    lostFocusEvent  = RoutedEvent.register("LostFocus", RoutingStrategy.bubble, getRtti!Element());
+    keyDownEvent    = RoutedEvent.register("onKeyDown", RoutingStrategy.bubble, getRtti!Element());
+    keyUpEvent      = RoutedEvent.register("onKeyUp", RoutingStrategy.bubble, getRtti!Element());
+    textInputEvent  = RoutedEvent.register("onTextInput", RoutingStrategy.bubble, getRtti!Element());
+    gotFocusEvent   = RoutedEvent.register("onGotFocus", RoutingStrategy.bubble, getRtti!Element());
+    lostFocusEvent  = RoutedEvent.register("onLostFocus", RoutingStrategy.bubble, getRtti!Element());
 
     // And the tier that lets an element act on the mouse because of what it is:
     // one class handler apiece, each calling the matching hook on Element, so

@@ -88,7 +88,7 @@ class Button : Control
         isCancelProperty = Property.register("isCancel",
             getRtti!bool(), getRtti!Button(), actionMeta);
 
-        clickEvent = RoutedEvent.register("Click", RoutingStrategy.bubble, getRtti!Button());
+        clickEvent = RoutedEvent.register("onClick", RoutingStrategy.bubble, getRtti!Button());
     }
 
     static immutable(Property) textProperty;
